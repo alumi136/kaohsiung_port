@@ -1,0 +1,35 @@
+name: Deploy to Production Server
+
+# 當推送到 main 分支時觸發此工作流
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest # 使用最新的 Ubuntu 虛擬環境來執行工作
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3 # 第一步：拉取你的 GitHub 儲存庫程式碼
+
+    - name: Deploy to Server
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USERNAME }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          # 進入網站目錄
+          cd /var/www/html
+          # 從 GitHub 拉取最新的 main 分支程式碼
+          git pull origin main
+          # (可選) 根據您的專案需求，在這裡加入其他指令
+          # 例如：安裝 PHP 套件
+          # composer install --no-dev --optimize-autoloader
+          # 例如：安裝 Python 套件
+          # pip install -r requirements.txt
+          # 例如：重新啟動服務
+          # sudo systemctl restart nginx
+          # sudo systemctl restart php-fpm
