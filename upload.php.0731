@@ -1,0 +1,271 @@
+<?php
+// 引入 Composer 的 autoloader，用於載入 PhpSpreadsheet
+require 'excel/vendor/autoload.php';
+
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Shared\Date;
+
+// --- 日誌功能 ---
+/**
+ * 將錯誤訊息寫入指定的日誌檔案。
+ * @param string $message 要記錄的訊息。
+ */
+function write_log($message) {
+    $log_file = '/var/www/html/daily_outbound.log'; // Log 檔案路徑
+    $timestamp = date('Y-m-d H:i:s');
+    // 格式化日誌訊息，包含時間戳記和換行符
+    $formatted_message = "[{$timestamp}] " . $message . PHP_EOL;
+    // 將訊息附加到日誌檔案，如果檔案不存在則會自動建立
+    // 注意：PHP需要有寫入此目錄的權限
+    file_put_contents($log_file, $formatted_message, FILE_APPEND);
+}
+
+// --- 資料庫連線設定 ---
+$servername = "localhost";
+$username = "alumi136";
+$password = "Alumi!36";
+$dbname = "kaohsiung_port_db";
+
+$user_message = '';
+$message_type = '';
+$import_errors = []; // 存放給使用者看的匯入錯誤訊息
+
+// 檢查表單是否已提交
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // 優先處理 "每日進出口資料" 的檔案
+    if (isset($_FILES['import_export_file']) && $_FILES['import_export_file']['error'] == UPLOAD_ERR_OK) {
+        
+        $file_tmp_path = $_FILES['import_export_file']['tmp_name'];
+        $file_name = htmlspecialchars(basename($_FILES['import_export_file']['name']));
+        $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+
+        // 檢查檔案類型是否為 xlsx 或 csv
+        if (!in_array($file_ext, ['xlsx', 'csv'])) {
+            $user_message = "檔案格式不支援。請上傳 .xlsx 或 .csv 檔案。";
+            $message_type = 'warn';
+        } else {
+            $conn = new mysqli($servername, $username, $password, $dbname);
+            if ($conn->connect_error) {
+                $error_msg = "資料庫連線失敗: " . $conn->connect_error;
+                write_log($error_msg);
+                $user_message = "系統錯誤：無法連線到資料庫。請聯繫管理員。";
+                $message_type = 'error';
+            } else {
+                $conn->set_charset("utf8mb4");
+                $inserted_rows = 0;
+                $processed_rows = 0;
+
+                $conn->begin_transaction();
+                
+                try {
+                    // 使用 PhpSpreadsheet 讀取檔案
+                    $spreadsheet = IOFactory::load($file_tmp_path);
+                    $worksheet = $spreadsheet->getActiveSheet();
+                    $highestRow = $worksheet->getHighestRow();
+                    
+                    $sql = "INSERT INTO daily_outbound (customer_name, declaration_no, master_no, house_no, weight, total_packages, packages_in, packages_out, clearance_method, declaration_type, carrier_id, route, storage_in_datetime, storage_out_datetime, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    $stmt = $conn->prepare($sql);
+                    if ($stmt === false) {
+                        throw new Exception("SQL 預備語句失敗: " . $conn->error);
+                    }
+
+                    // 從第二行開始讀取 (忽略標頭)
+                    for ($row = 2; $row <= $highestRow; $row++) {
+                        $processed_rows++;
+                        $rowData = [];
+                        // 從 A 欄讀取到 O 欄 (15個欄位)
+                        for ($col = 'A'; $col <= 'O'; $col++) {
+                            $rowData[] = $worksheet->getCell($col . $row)->getValue();
+                        }
+                        
+                        try {
+                            // 資料清理與格式轉換
+                            $weight = !empty($rowData[4]) ? floatval($rowData[4]) : 0;
+                            $total_packages = !empty($rowData[5]) ? intval($rowData[5]) : 0;
+                            $packages_in = !empty($rowData[6]) ? intval($rowData[6]) : 0;
+                            $packages_out = !empty($rowData[7]) ? intval($rowData[7]) : 0;
+
+                            // 處理 Excel 日期格式
+                            $storage_in = !empty($rowData[12]) ? Date::excelToDateTimeObject($rowData[12])->format('Y-m-d H:i:s') : null;
+                            $storage_out = !empty($rowData[13]) ? Date::excelToDateTimeObject($rowData[13])->format('Y-m-d H:i:s') : null;
+
+                            $stmt->bind_param(
+                                "ssssdiiisssssss",
+                                $rowData[0], $rowData[1], $rowData[2], $rowData[3],
+                                $weight, $total_packages, $packages_in, $packages_out,
+                                $rowData[8], $rowData[9], $rowData[10], $rowData[11],
+                                $storage_in, $storage_out, $rowData[14]
+                            );
+                            
+                            if (!$stmt->execute()) {
+                                // 捕獲特定行的插入錯誤
+                                throw new Exception($stmt->error);
+                            }
+                            $inserted_rows++;
+
+                        } catch (Exception $rowException) {
+                            // 記錄給使用者的錯誤訊息
+                            $import_errors[] = "第 {$row} 行資料處理失敗: " . htmlspecialchars($rowException->getMessage());
+                        }
+                    }
+                    
+                    // 根據是否有錯誤決定提交或還原
+                    if (empty($import_errors)) {
+                        $conn->commit();
+                        $user_message = "檔案 '" . $file_name . "' 處理完成。<br>成功匯入 " . $inserted_rows . " 筆資料。";
+                        $message_type = 'success';
+                    } else {
+                        $conn->rollback();
+                        $user_message = "檔案 '" . $file_name . "' 匯入失敗，所有操作已還原。<br>共發現 " . count($import_errors) . " 筆錯誤，請修正後再試。";
+                        $message_type = 'error';
+                        // 將詳細錯誤寫入日誌
+                        write_log("File import failed for '{$file_name}'. Errors: " . implode(" | ", $import_errors));
+                    }
+
+                } catch (Exception $e) {
+                    $conn->rollback();
+                    $error_msg = "匯入過程發生嚴重錯誤: " . $e->getMessage();
+                    write_log($error_msg);
+                    $user_message = "系統發生嚴重錯誤，匯入已中斷並還原。請聯繫管理員。";
+                    $message_type = 'error';
+                } finally {
+                    if (isset($stmt)) $stmt->close();
+                    $conn->close();
+                }
+            }
+        }
+    } elseif (isset($_FILES['tax_file']) && $_FILES['tax_file']['error'] == UPLOAD_ERR_OK) {
+        $user_message = "已收到稅金資料檔案，但尚未實作處理邏輯。";
+        $message_type = 'info';
+    } elseif ($_SERVER["REQUEST_METHOD"] == "POST") {
+        $user_message = '請選擇一個有效的檔案上傳。';
+        $message_type = 'warn';
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高雄港萬海倉海運快遞管理系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
+        .modal-backdrop {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0,0,0,0.5); z-index: 50;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .modal-content {
+            background-color: white; padding: 2rem; border-radius: 0.75rem;
+            width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;
+        }
+        .modal-header { font-size: 1.25rem; font-weight: bold; margin-bottom: 1rem; }
+        .modal-body { margin-bottom: 1.5rem; }
+        .modal-body ul { list-style-type: decimal; padding-left: 1.5rem; }
+        .modal-body li { margin-bottom: 0.5rem; font-family: monospace; }
+        .modal-footer { text-align: right; }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+
+    <div class="w-full max-w-2xl mx-auto bg-white rounded-xl shadow-lg p-8 md:p-12 my-8">
+        
+        <header class="mb-8 text-center">
+            <h1 class="text-2xl md:text-3xl font-bold text-blue-900">
+                高雄港萬海倉海運快遞管理系統
+            </h1>
+        </header>
+
+        <main>
+            <?php if ($user_message): ?>
+                <div class="mb-6 p-4 rounded-lg <?php 
+                    switch ($message_type) {
+                        case 'success': echo 'bg-green-100 text-green-800'; break;
+                        case 'error': echo 'bg-red-100 text-red-800'; break;
+                        case 'warn': echo 'bg-yellow-100 text-yellow-800'; break;
+                        default: echo 'bg-blue-100 text-blue-800'; break;
+                    }
+                ?>">
+                    <?php echo $user_message; ?>
+                </div>
+            <?php endif; ?>
+
+            <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post" enctype="multipart/form-data" class="space-y-8">
+                
+                <div class="p-6 border border-gray-200 rounded-lg">
+                    <label for="import_export_file" class="block text-lg font-semibold text-gray-700 mb-3">
+                        每日進出口資料上傳 (.xlsx, .csv)
+                    </label>
+                    <p class="text-sm text-gray-500 mb-4">請選擇包含每日進出口資料的檔案。系統會將資料匯入 `daily_outbound` 資料表。</p>
+                    <input type="file" name="import_export_file" id="import_export_file" accept=".xlsx,.csv" class="block w-full text-sm text-gray-500
+                        file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold
+                        file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                </div>
+
+                <div class="p-6 border border-gray-200 rounded-lg bg-gray-50">
+                    <label for="tax_file" class="block text-lg font-semibold text-gray-700 mb-3">每日稅金資料上傳</label>
+                    <p class="text-sm text-gray-500 mb-4">此功能尚未實作。</p>
+                    <input type="file" name="tax_file" id="tax_file" disabled class="block w-full text-sm text-gray-500
+                        file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold
+                        file:bg-gray-200 file:text-gray-500">
+                </div>
+
+                <div>
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg focus:outline-none focus:shadow-outline transition-colors duration-300">
+                        上傳並匯入資料
+                    </button>
+                </div>
+            </form>
+        </main>
+    </div>
+
+    <!-- 錯誤訊息彈出視窗 -->
+    <div id="error-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header text-red-600">匯入錯誤詳細資訊</div>
+            <div class="modal-body">
+                <p class="mb-4">以下是在匯入檔案時發現的錯誤，請修正後再重新上傳：</p>
+                <ul id="error-list">
+                    <!-- JavaScript 會在這裡填入錯誤訊息 -->
+                </ul>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded">
+                    關閉
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showModal(errors) {
+            const modal = document.getElementById('error-modal');
+            const list = document.getElementById('error-list');
+            list.innerHTML = ''; // 清空舊的錯誤
+            errors.forEach(error => {
+                const li = document.createElement('li');
+                li.textContent = error;
+                list.appendChild(li);
+            });
+            modal.style.display = 'flex';
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('error-modal');
+            modal.style.display = 'none';
+        }
+
+        <?php
+        // 如果有匯入錯誤，則呼叫 JavaScript 顯示彈出視窗
+        if (!empty($import_errors)) {
+            echo "showModal(" . json_encode($import_errors) . ");";
+        }
+        ?>
+    </script>
+
+</body>
+</html>
+

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<modification>
+	<name>Change Default Product Sort Order</name>
+	<version>2021.02.07</version>
+	<author>Serium + OSEC.tw</author>
+	<code>change_default_product_sort_order</code>
+	
+	<file path="catalog/model/catalog/product.php">
+		<operation>
+			<search><![CDATA['p.sort_order',]]></search>
+			<add position="after"><![CDATA[
+			'p.date_modified',
+			]]></add>
+		</operation>
+	</file>
+
+	<file path="catalog/controller/product/category.php">
+		<operation>
+			<search><![CDATA[
+			$sort = 'p.sort_order';
+			]]></search>
+			<add position="replace"><![CDATA[
+			$sort = 'p.date_modified';
+			]]></add>
+		</operation>
+		<operation>
+			<search><![CDATA[
+			$order = 'ASC';
+			]]></search>
+			<add position="replace"><![CDATA[
+			$order = 'DESC';
+			]]></add>
+		</operation>
+	</file>
+	<file path="catalog/controller/product/search.php">
+		<operation>
+			<search><![CDATA[
+			$sort = 'p.sort_order';
+			]]></search>
+			<add position="replace"><![CDATA[
+			$sort = 'p.date_modified';
+			]]></add>
+		</operation>
+		<operation>
+			<search><![CDATA[
+			$order = 'ASC';
+			]]></search>
+			<add position="replace"><![CDATA[
+			$order = 'DESC';
+			]]></add>
+		</operation>
+	</file>
+	<file path="catalog/controller/product/special.php">
+		<operation>
+			<search><![CDATA[
+			$sort = 'p.sort_order';
+			]]></search>
+			<add position="replace"><![CDATA[
+			$sort = 'p.date_modified';
+			]]></add>
+		</operation>
+		<operation>
+			<search><![CDATA[
+			$order = 'ASC';
+			]]></search>
+			<add position="replace"><![CDATA[
+			$order = 'DESC';
+			]]></add>
+		</operation>
+	</file>
+
+</modification>

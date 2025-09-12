@@ -1,0 +1,124 @@
+from dotenv import load_dotenv
+from flask import Flask, request, abort, jsonify
+from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
+import mysql.connector
+import os
+import threading
+
+app = Flask(__name__)
+load_dotenv()
+# 從環境變數取得 Line Channel Token 和 Secret
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+
+# 初始化 Line Bot API 和 Webhook Handler
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+# 資料庫連線設定
+db_config = {
+    "host": "mouse.galloptek.com",
+    "user": "alumi136",  # 請替換為您的 MySQL 使用者
+    "password": "Alumi!36",  # 請替換為您的 MySQL 密碼
+    "database": "kaohsiung_port_db",
+    "charset": "utf8mb4",
+    "connection_timeout": 50,
+    "read_timeout": 50,
+    "write_timeout": 50
+}
+
+# 處理 Webhook 請求的路由
+@app.route("/callback", methods=["POST"])
+def callback():
+    signature = request.headers.get("X-Line-Signature")
+    if signature is None:
+        abort(400)
+    body = request.get_data(as_text=True)
+
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        # 如果簽名無效，則中止請求
+        abort(400)
+
+    # 立即回覆 200 OK，避免 LINE 超時
+    return jsonify({"status": "received"})
+
+# 處理文字訊息的事件
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
+    message_text = event.message.text.strip()
+
+    # --- 新增的邏輯判斷 ---
+    # 1. 判斷是否為 "Hello" (不區分大小寫)
+    if message_text.lower() == "hello":
+        reply_text = "歡迎加入億欣報關行Line官方帳號，有需要什麼服務，請您直接鍵入相關字"
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply_text)
+        )
+        return  # 處理完畢，直接返回
+
+    # 2. 判斷是否為 "稅金"
+    elif message_text == "稅金":
+        reply_text = "關於稅金金額可以直接從您的EzWay APP上查詢到相關金額或是關港貿單一窗口進行查詢，基於個資保護法我們無法在線上提供稅金金額供查詢，請您諒解，謝謝您"
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply_text)
+        )
+        return  # 處理完畢，直接返回
+
+    # --- 原始的資料庫查詢邏輯 ---
+    # 如果不符合上述關鍵字，才在新的執行緒中處理耗時查詢與回覆
+    threading.Thread(target=process_message, args=(event,)).start()
+
+def process_message(event):
+    house_no = event.message.text.strip()
+
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+        SELECT master_no, house_no, storage_in_datetime, storage_out_datetime, status
+        FROM daily_outbound
+        WHERE house_no = %s
+        """
+        cursor.execute(query, (house_no,))
+        rows = cursor.fetchall()
+
+        if not rows:
+            reply_text = f"查無分提單號：{house_no}"
+        else:
+            reply_lines = []
+            for row in rows:
+                reply_lines.append(
+                    f"主號: {row['master_no']}\n"
+                    f"分號: {row['house_no']}\n"
+                    f"進倉: {row['storage_in_datetime']}\n"
+                    f"出倉: {row['storage_out_datetime']}\n"
+                    f"狀態: {row['status']}"
+                )
+            reply_text = "\n\n".join(reply_lines)
+
+        cursor.close()
+        conn.close()
+
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply_text)
+        )
+    except Exception as e:
+        # 失敗時也回覆用戶
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="系統發生錯誤，請稍後再試。")
+        )
+        # 在這裡 log 詳細錯誤以供除錯
+        print("Error in process_message:", e)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+

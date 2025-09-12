@@ -1,0 +1,230 @@
+# app_single_file.py
+
+from flask import Flask, request, render_template_string
+import xml.etree.ElementTree as ET
+from xml.dom import minidom
+import cgi # 用於對輸出進行HTML轉義，增加安全性
+
+app = Flask(__name__)
+
+# 將整個 HTML 頁面結構定義為一個 Python 的多行字串
+# 我們使用 Jinja2 的語法 {{ ... }} 和 {% ... %}，Flask 的 render_template_string 會處理它
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物流資料輸入 (純 Python)</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2em; background-color: #f4f4f4; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; }
+        form { display: grid; grid-template-columns: 1fr 2fr; gap: 15px; align-items: center; }
+        label { font-weight: bold; }
+        input[type="text"], input[type="number"], input[type="date"] {
+            width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;
+        }
+        .required-label::after { content: ' *'; color: red; }
+        button {
+            grid-column: 1 / -1; /* Span across all columns */
+            padding: 10px 15px; background-color: #007bff; color: white; border: none;
+            border-radius: 4px; cursor: pointer; font-size: 16px;
+        }
+        button:hover { background-color: #0056b3; }
+        fieldset { border: 1px solid #ccc; border-radius: 5px; padding: 20px; margin-top: 20px; grid-column: 1 / -1; }
+        legend { font-weight: bold; font-size: 1.2em; color: #0056b3; }
+        textarea { width: 100%; height: 300px; font-family: monospace; font-size: 14px; margin-top: 20px; background-color: #e9e9e9; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>物流資料輸入表單 (純 Python 版)</h1>
+    <form action="/" method="POST">
+        <label for="logisticsOrderCode" class="required-label">logisticsOrderCode</label>
+        <input type="text" id="logisticsOrderCode" name="logisticsOrderCode" maxlength="64" required>
+
+        <label for="trackingNumber" class="required-label">trackingNumber</label>
+        <input type="text" id="trackingNumber" name="trackingNumber" maxlength="64" required>
+
+        <label for="waybillNumber" class="required-label">waybillNumber</label>
+        <input type="text" id="waybillNumber" name="waybillNumber" maxlength="64" required>
+
+        <label for="opTime" class="required-label">opTime</label>
+        <input type="date" id="opTime" name="opTime" required>
+
+        <label for="timeZone" class="required-label">timeZone</label>
+        <input type="number" id="timeZone" name="timeZone" required>
+
+        <label for="transportType" class="required-label">transportType</label>
+        <input type="text" id="transportType" name="transportType" maxlength="64" required>
+
+        <label for="fromPortCode" class="required-label">fromPortCode</label>
+        <input type="text" id="fromPortCode" name="fromPortCode" maxlength="64" required>
+
+        <label for="toPortCode" class="required-label">toPortCode</label>
+        <input type="text" id="toPortCode" name="toPortCode" maxlength="64" required>
+
+        <label for="operator" class="required-label">operator</label>
+        <input type="text" id="operator" name="operator" maxlength="64" required>
+
+        <label for="operatorContact">operatorContact</label>
+        <input type="text" id="operatorContact" name="operatorContact" maxlength="64">
+
+        <label for="opLocation">opLocation</label>
+        <input type="text" id="opLocation" name="opLocation" maxlength="64">
+
+        <label for="opCode" class="required-label">opCode</label>
+        <input type="text" id="opCode" name="opCode" maxlength="64" required>
+
+        <label for="opRemark">opRemark</label>
+        <input type="text" id="opRemark" name="opRemark" maxlength="256">
+        
+        <label for="trackingDescription">trackingDescription</label>
+        <input type="text" id="trackingDescription" name="trackingDescription" maxlength="256">
+
+        <label for="imgUrl">imgUrl</label>
+        <input type="text" id="imgUrl" name="imgUrl" maxlength="256">
+
+        <fieldset>
+            <legend>Parcel</legend>
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 15px; align-items: center;">
+                <label for="weight">weight</label>
+                <input type="number" step="any" id="weight" name="weight">
+
+                <label for="weightUnit">weightUnit</label>
+                <input type="text" id="weightUnit" name="weightUnit" maxlength="64">
+
+                <label for="length">length</label>
+                <input type="number" step="any" id="length" name="length">
+
+                <label for="width">width</label>
+                <input type="number" step="any" id="width" name="width">
+
+                <label for="height">height</label>
+                <input type="number" step="any" id="height" name="height">
+
+                <label for="dimensionUnit">dimensionUnit</label>
+                <input type="text" id="dimensionUnit" name="dimensionUnit" maxlength="64">
+
+                <label for="packingType">packingType</label>
+                <input type="number" id="packingType" name="packingType">
+            </div>
+        </fieldset>
+        
+        <label for="bigBagID" class="required-label">bigBagID</label>
+        <input type="text" id="bigBagID" name="bigBagID" maxlength="64" required>
+
+        <label for="parcelQuantity">parcelQuantity</label>
+        <input type="number" id="parcelQuantity" name="parcelQuantity">
+
+        <label for="bigBagWeight">bigBagWeight</label>
+        <input type="number" step="any" id="bigBagWeight" name="bigBagWeight">
+
+        <label for="bigBagWeightUnit">bigBagWeightUnit</label>
+        <input type="text" id="bigBagWeightUnit" name="bigBagWeightUnit" maxlength="64">
+
+        <label for="masterID">masterID</label>
+        <input type="text" id="masterID" name="masterID" maxlength="64">
+
+        <label for="asnID" class="required-label">asnID</label>
+        <input type="text" id="asnID" name="asnID" maxlength="64" required>
+        
+        <fieldset>
+            <legend>GoodsList (Goods)</legend>
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 15px; align-items: center;">
+                <label for="productID">productID</label>
+                <input type="text" id="productID" name="productID" maxlength="64">
+
+                <label for="hsCode">hsCode</label>
+                <input type="text" id="hsCode" name="hsCode" maxlength="64">
+                
+                <label for="localName">localName</label>
+                <input type="text" id="localName" name="localName" maxlength="128">
+
+                <label for="clearanceMode" class="required-label">clearanceMode</label>
+                <input type="text" id="clearanceMode" name="clearanceMode" maxlength="32" required>
+            </div>
+        </fieldset>
+
+        <label for="opTimeStamp">opTimeStamp</label>
+        <input type="text" id="opTimeStamp" name="opTimeStamp" maxlength="32">
+        
+        <label for="utcOffset">utcOffset</label>
+        <input type="text" id="utcOffset" name="utcOffset" maxlength="64">
+        
+        <label for="reRouteToCode">reRouteToCode</label>
+        <input type="text" id="reRouteToCode" name="reRouteToCode" maxlength="32">
+        
+        <button type="submit">確定</button>
+    </form>
+    
+    {% if xml_output %}
+    <h2>生成的 XML 結果:</h2>
+    <textarea readonly>{{ xml_output }}</textarea>
+    {% endif %}
+</div>
+
+</body>
+</html>
+"""
+
+def pretty_print_xml(elem):
+    """將 ElementTree 元素轉換為格式化（帶縮排）的字串"""
+    rough_string = ET.tostring(elem, 'utf-8')
+    reparsed = minidom.parseString(rough_string)
+    return reparsed.toprettyxml(indent="  ")
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    xml_output = ""
+    if request.method == 'POST':
+        # 接收表單資料
+        form_data = request.form
+
+        # 建立 XML 根元素
+        root = ET.Element('LogisticsData')
+
+        # 將主要欄位加入 XML
+        main_fields = [
+            'logisticsOrderCode', 'trackingNumber', 'waybillNumber', 'opTime', 
+            'timeZone', 'transportType', 'fromPortCode', 'toPortCode', 'operator',
+            'operatorContact', 'opLocation', 'opCode', 'opRemark', 
+            'trackingDescription', 'imgUrl', 'bigBagID', 'masterID', 'asnID', 
+            'opTimeStamp', 'utcOffset', 'reRouteToCode'
+        ]
+        for field in main_fields:
+            if form_data.get(field):
+                ET.SubElement(root, field).text = form_data.get(field)
+
+        # 處理巢狀結構: Parcel
+        parcel_node = ET.SubElement(root, 'parcel')
+        parcel_fields = [
+            'weight', 'weightUnit', 'length', 'width', 'height', 
+            'dimensionUnit', 'packingType', 'parcelQuantity', 
+            'bigBagWeight', 'bigBagWeightUnit'
+        ]
+        for field in parcel_fields:
+            if form_data.get(field):
+                ET.SubElement(parcel_node, field).text = form_data.get(field)
+        
+        # 處理列表結構: goodsList (此範例僅處理一組商品，可擴充)
+        goods_list_node = ET.SubElement(root, 'goodsList')
+        goods_node = ET.SubElement(goods_list_node, 'goods')
+        goods_fields = ['productID', 'hsCode', 'localName', 'clearanceMode']
+        
+        for field in goods_fields:
+             if form_data.get(field):
+                ET.SubElement(goods_node, field).text = form_data.get(field)
+
+        # 產生格式化的 XML 字串
+        # 使用 cgi.escape 避免 XML/HTML 注入問題
+        xml_output = cgi.escape(pretty_print_xml(root))
+
+    # 使用 render_template_string 來渲染儲存在變數中的 HTML
+    # 並將 xml_output 變數傳遞給模板
+    return render_template_string(HTML_TEMPLATE, xml_output=xml_output)
+
+if __name__ == '__main__':
+    app.run(debug=True)

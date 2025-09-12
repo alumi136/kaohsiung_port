@@ -1,0 +1,346 @@
+<?php
+// --- 資源優化設定 ---
+// 增加腳本最大執行時間至 1200 秒 (20 分鐘)
+set_time_limit(1200);
+// 大幅提高記憶體限制至 1GB，以應對大型檔案處理
+ini_set('memory_limit', '512M');
+
+// 引入 Composer 的 autoloader
+require '/var/www/html/excel/vendor/autoload.php';
+
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Shared\Date;
+
+/**
+ * 實作 IReadFilter 介面，用於分塊讀取 Excel 檔案，大幅降低記憶體消耗。
+ */
+class ChunkReadFilter implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter
+{
+    private int $startRow = 0;
+    private int $endRow = 0;
+
+    /**
+     * 設定要讀取的行範圍。
+     * @param int $startRow 開始行
+     * @param int $chunkSize 每個區塊的大小
+     */
+    public function setRows(int $startRow, int $chunkSize): void
+    {
+        $this->startRow = $startRow;
+        $this->endRow = $startRow + $chunkSize;
+    }
+
+    public function readCell($columnAddress, $row, $worksheetName = ''): bool
+    {
+        // 只讀取指定範圍內的行
+        return ($row >= $this->startRow && $row < $this->endRow);
+    }
+}
+
+
+// --- 日誌功能 ---
+function write_log($message) {
+    $log_file = '/var/www/html/daily_outbound.log';
+    $timestamp = date('Y-m-d H:i:s');
+    $formatted_message = "[{$timestamp}] " . $message . PHP_EOL;
+    file_put_contents($log_file, $formatted_message, FILE_APPEND);
+}
+
+// --- 日期解析功能 ---
+function parse_date_value($value) {
+    if (empty($value)) return null;
+    if (is_numeric($value)) return Date::excelToDateTimeObject($value)->format('Y-m-d H:i:s');
+    if (is_string($value)) {
+        $timestamp = strtotime($value);
+        if ($timestamp !== false) return date('Y-m-d H:i:s', $timestamp);
+    }
+    throw new Exception("無法辨識的日期格式");
+}
+
+// --- 資料庫連線設定 ---
+$servername = "localhost";
+$username = "alumi136";
+$password = "Alumi!36";
+$dbname = "kaohsiung_port_db";
+
+$user_message = '';
+$message_type = '';
+$import_errors = [];
+
+// --- 核心處理邏輯 ---
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['import_export_file']) && $_FILES['import_export_file']['error'] == UPLOAD_ERR_OK) {
+    
+    $file_tmp_path = $_FILES['import_export_file']['tmp_name'];
+    $file_name = htmlspecialchars(basename($_FILES['import_export_file']['name']));
+    $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+
+    if (!in_array($file_ext, ['xlsx', 'xls', 'csv'])) {
+        $user_message = "檔案格式不支援。請上傳 .xlsx, .xls 或 .csv 檔案。";
+        $message_type = 'warn';
+    } else {
+        $conn = new mysqli($servername, $username, $password, $dbname);
+        if ($conn->connect_error) {
+            $error_msg = "資料庫連線失敗: " . $conn->connect_error;
+            write_log($error_msg);
+            $user_message = "系統錯誤：無法連線到資料庫。請聯繫管理員。";
+            $message_type = 'error';
+        } else {
+            $conn->set_charset("utf8mb4");
+            $conn->begin_transaction();
+            
+            $total_inserted_rows = 0;
+            $chunk_size = 1000; // 每次處理 1000 筆資料，可根據伺服器效能調整
+
+            try {
+                $reader = IOFactory::createReaderForFile($file_tmp_path);
+                
+                // **優化關鍵**：先獲取工作表資訊，得知總行數，而不載入整個檔案
+                $worksheetInfo = $reader->listWorksheetInfo($file_tmp_path);
+                $highestRow = $worksheetInfo[0]['totalRows'];
+
+                $chunkFilter = new ChunkReadFilter();
+                $reader->setReadFilter($chunkFilter);
+
+                // **優化關鍵**：以分塊方式迴圈讀取整個檔案
+                for ($startRow = 2; $startRow <= $highestRow; $startRow += $chunk_size) {
+                    $chunkFilter->setRows($startRow, $chunk_size);
+                    $spreadsheet = $reader->load($file_tmp_path);
+                    $worksheet = $spreadsheet->getActiveSheet();
+                    
+                    $data_chunk = [];
+                    // 只迭代當前區塊的行
+                    foreach ($worksheet->getRowIterator($startRow) as $row) {
+                        $cellIterator = $row->getCellIterator('A', 'O');
+                        $cellIterator->setIterateOnlyExistingCells(false); 
+                        $rowData = [];
+                        foreach ($cellIterator as $cell) {
+                            $rowData[] = $cell->getValue();
+                        }
+
+                        if (empty($rowData[0]) && empty($rowData[1]) && empty($rowData[2])) {
+                            continue;
+                        }
+                        
+                        try {
+                             // 資料清理與格式轉換
+                            $data_chunk[] = [
+                                'declaration_no' => (string) $rowData[0], 'master_no' => (string) $rowData[1],
+                                'house_no' => (string) $rowData[2], 'weight' => !empty($rowData[3]) ? floatval($rowData[3]) : 0,
+                                'total_packages' => !empty($rowData[4]) ? intval($rowData[4]) : 0, 'packages_in' => !empty($rowData[5]) ? intval($rowData[5]) : 0,
+                                'packages_out' => !empty($rowData[6]) ? intval($rowData[6]) : 0, 'clearance_method' => (string) $rowData[7],
+                                'declaration_type' => (string) $rowData[8], 'carrier_id' => (string) $rowData[9],
+                                'route' => (string) $rowData[10], 'storage_in_datetime' => parse_date_value($rowData[11]),
+                                'storage_out_datetime' => parse_date_value($rowData[12]), 'status' => (string) $rowData[13],
+                                'customer_name' => (string) $rowData[14]
+                            ];
+                        } catch (Exception $rowException) {
+                            $import_errors[] = "第 {$row->getRowIndex()} 行資料處理失敗: " . htmlspecialchars($rowException->getMessage());
+                        }
+                    }
+
+                    if (!empty($data_chunk)) {
+                        $total_inserted_rows += batch_insert($conn, $data_chunk);
+                    }
+                    
+                    // **優化關鍵**：處理完一個區塊後，斷開工作表連結以釋放記憶體
+                    $spreadsheet->disconnectWorksheets();
+                    unset($spreadsheet, $worksheet, $data_chunk, $cellIterator, $row);
+                }
+
+
+                // 根據是否有錯誤決定提交或還原
+                if (empty($import_errors)) {
+                    $conn->commit();
+                    $user_message = "檔案 '" . $file_name . "' 處理完成。<br>共新增 " . $total_inserted_rows . " 筆資料。";
+                    $message_type = 'success';
+                } else {
+                    $conn->rollback();
+                    $user_message = "檔案 '" . $file_name . "' 匯入失敗，所有操作已還原。<br>共發現 " . count($import_errors) . " 筆錯誤，請修正後再試。";
+                    $message_type = 'error';
+                    write_log("File import failed for '{$file_name}'. Errors: " . implode(" | ", $import_errors));
+                }
+
+            } catch (Exception $e) {
+                $conn->rollback();
+                $error_msg = "匯入過程發生嚴重錯誤: " . $e->getMessage();
+                write_log($error_msg);
+                $user_message = "系統發生嚴重錯誤，匯入已中斷並還原。請聯繫管理員。";
+                $message_type = 'error';
+            } finally {
+                $conn->close();
+            }
+        }
+    }
+}
+
+/**
+ * 批次寫入資料到資料庫的輔助函式
+ * @param mysqli $conn 資料庫連線物件
+ * @param array $data 要寫入的資料陣列
+ * @return int 成功寫入的筆數
+ * @throws Exception 當 SQL 執行失敗時
+ */
+function batch_insert(mysqli $conn, array $data): int {
+    if (empty($data)) {
+        return 0;
+    }
+
+    $sql = "INSERT INTO daily_outbound (declaration_no, master_no, house_no, weight, total_packages, packages_in, packages_out, clearance_method, declaration_type, carrier_id, route, storage_in_datetime, storage_out_datetime, status, customer_name) VALUES ";
+    
+    $placeholders = [];
+    $params = [];
+    $types = '';
+    
+    foreach ($data as $row) {
+        $placeholders[] = '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        array_push($params, 
+            $row['declaration_no'], $row['master_no'], $row['house_no'],
+            $row['weight'], $row['total_packages'], $row['packages_in'], $row['packages_out'],
+            $row['clearance_method'], $row['declaration_type'], $row['carrier_id'], $row['route'],
+            $row['storage_in_datetime'], $row['storage_out_datetime'], $row['status'], $row['customer_name']
+        );
+        $types .= 'sssdiisssssssss';
+    }
+    
+    $sql .= implode(', ', $placeholders);
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        throw new Exception("SQL 批次新增預備語句失敗: " . $conn->error);
+    }
+    $stmt->bind_param($types, ...$params);
+    
+    if (!$stmt->execute()) {
+        throw new Exception("批次新增執行失敗: " . $stmt->error);
+    }
+    
+    $affected_rows = $stmt->affected_rows;
+    $stmt->close();
+    return $affected_rows;
+}
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高雄港萬海倉海運快遞管理系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
+        .modal-backdrop {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0,0,0,0.5); z-index: 50;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .modal-content {
+            background-color: white; padding: 2rem; border-radius: 0.75rem;
+            width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;
+        }
+        .modal-header { font-size: 1.25rem; font-weight: bold; margin-bottom: 1rem; }
+        .modal-body { margin-bottom: 1.5rem; }
+        .modal-body ul { list-style-type: decimal; padding-left: 1.5rem; }
+        .modal-body li { margin-bottom: 0.5rem; font-family: monospace; }
+        .modal-footer { text-align: right; }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+
+    <div class="w-full max-w-2xl mx-auto bg-white rounded-xl shadow-lg p-8 md:p-12 my-8">
+        
+        <header class="mb-8 text-center">
+            <h1 class="text-2xl md:text-3xl font-bold text-blue-900">
+                高雄港萬海倉海運快遞管理系統
+            </h1>
+        </header>
+
+        <main>
+            <?php if ($user_message): ?>
+                <div class="mb-6 p-4 rounded-lg <?php 
+                    switch ($message_type) {
+                        case 'success': echo 'bg-green-100 text-green-800'; break;
+                        case 'error': echo 'bg-red-100 text-red-800'; break;
+                        case 'warn': echo 'bg-yellow-100 text-yellow-800'; break;
+                        default: echo 'bg-blue-100 text-blue-800'; break;
+                    }
+                ?>">
+                    <?php echo $user_message; ?>
+                </div>
+            <?php endif; ?>
+
+            <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post" enctype="multipart/form-data" class="space-y-8">
+                
+                <div class="p-6 border border-gray-200 rounded-lg">
+                    <label for="import_export_file" class="block text-lg font-semibold text-gray-700 mb-3">
+                        每日進出口資料上傳 (.xlsx, .xls, .csv)
+                    </label>
+                    <p class="text-sm text-gray-500 mb-4">請選擇包含每日進出口資料的檔案。系統會將資料匯入 `daily_outbound` 資料表。</p>
+                    <input type="file" name="import_export_file" id="import_export_file" accept=".xlsx,.xls,.csv" class="block w-full text-sm text-gray-500
+                        file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold
+                        file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                </div>
+
+                <div class="p-6 border border-gray-200 rounded-lg bg-gray-50">
+                    <label for="tax_file" class="block text-lg font-semibold text-gray-700 mb-3">每日稅金資料上傳</label>
+                    <p class="text-sm text-gray-500 mb-4">此功能尚未實作。</p>
+                    <input type="file" name="tax_file" id="tax_file" disabled class="block w-full text-sm text-gray-500
+                        file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold
+                        file:bg-gray-200 file:text-gray-500">
+                </div>
+
+                <div>
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg focus:outline-none focus:shadow-outline transition-colors duration-300">
+                        上傳並匯入資料
+                    </button>
+                </div>
+            </form>
+        </main>
+    </div>
+
+    <!-- 錯誤訊息彈出視窗 -->
+    <div id="error-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header text-red-600">匯入錯誤詳細資訊</div>
+            <div class="modal-body">
+                <p class="mb-4">以下是在匯入檔案時發現的錯誤，請修正後再重新上傳：</p>
+                <ul id="error-list">
+                    <!-- JavaScript 會在這裡填入錯誤訊息 -->
+                </ul>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded">
+                    關閉
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showModal(errors) {
+            const modal = document.getElementById('error-modal');
+            const list = document.getElementById('error-list');
+            list.innerHTML = ''; // 清空舊的錯誤
+            errors.forEach(error => {
+                const li = document.createElement('li');
+                li.textContent = error;
+                list.appendChild(li);
+            });
+            modal.style.display = 'flex';
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('error-modal');
+            modal.style.display = 'none';
+        }
+
+        <?php
+        // 如果有匯入錯誤，則呼叫 JavaScript 顯示彈出視窗
+        if (!empty($import_errors)) {
+            echo "showModal(" . json_encode($import_errors) . ");";
+        }
+        ?>
+    </script>
+
+</body>
+</html>
+

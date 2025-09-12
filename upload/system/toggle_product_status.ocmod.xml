@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<modification>
+	<name>Toggle Product Status</name>
+	<code>Toggle Product Status</code>
+	<version>1.0</version>
+	<author>parsoc</author>
+	<link>https://parsoc.ir</link>
+
+    <file path="admin/controller/catalog/product.php" error="skip">
+	    <operation error="skip">
+            <search><![CDATA[function index() {]]></search>
+            <add position="before"><![CDATA[
+				public function toggle_status(){
+					$json = array();
+
+					if (isset($this->request->post['product_id'])) {
+						$this->db->query("UPDATE " . DB_PREFIX . "product SET status = IF (status = 1, 0, 1) WHERE product_id = '" . (int)$this->request->post['product_id'] . "'");
+
+						if ($this->db->countAffected()) {
+							$json['success'] = true;
+						}
+					}
+
+					$this->response->addHeader('Content-Type: application/json');
+					$this->response->setOutput(json_encode($json));
+				}
+			]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/view/template/catalog/product_list.twig" error="skip">
+	    <operation error="skip">
+            <search><![CDATA[<div id="content">]]></search>
+            <add position="after"><![CDATA[
+				<style type="text/css">
+				[data-toggle-id] i {
+					font-size: 20px;
+					cursor: pointer;
+				}
+				[data-toggle-id] i.disabled::before {
+					display: none;
+				}
+				[data-toggle-id] .fa-spinner {
+					color: #000;
+				}
+				[data-toggle-id] .fa-check-circle {
+					color: #4cb64c;
+				}
+				[data-toggle-id] .fa-times-circle {
+					color: #e3503e;
+				}
+				[data-toggle-id] .fa-exclamation-circle {
+					color: #f3a638;
+				}
+				</style>
+			]]></add>
+        </operation>
+	    <operation error="skip">
+            <search><![CDATA[<td class="text-left">{{ product.status }}]]></search>
+            <add position="replace"><![CDATA[
+				<td class="text-center"><a data-toggle-id="{{ product.product_id }}"><i data-loading-text="<i class='fa fa-spin fa-spinner'></i>" class="fa fa-{% if product.status == text_enabled %}check{% else %}times{% endif %}-circle"></i></a>
+			]]></add>
+        </operation>
+	    <operation error="skip">
+            <search><![CDATA[{{ footer }}]]></search>
+            <add position="before"><![CDATA[
+				<script type="text/javascript"><!--
+				$('[data-toggle-id]').on('click', function() {
+				  var element = $(this);
+				  var i = element.find('i');
+
+				  $.ajax({
+					url: 'index.php?route=catalog/product/toggle_status&user_token={{ user_token }}',
+					type: 'post',
+					data: {
+					  product_id: element.data('toggle-id')
+					},
+					dataType: 'json',
+					beforeSend: function() {
+					  i.button('loading');
+					},
+					complete: function() {
+					  i.button('reset');
+					},
+					success: function(json) {
+					  if (json['success']) {
+						i.toggleClass('fa-check-circle fa-times-circle');
+					  } else {
+						i.addClass('fa-exclamation-circle');
+					  }
+					},
+					error: function(xhr, ajaxOptions, thrownError) {
+					  console.log(thrownError + "\r\n" + xhr.statusText + "\r\n" + xhr.responseText);
+					}
+				  });
+				});
+				//--></script>
+			]]></add>
+        </operation>
+    </file>
+</modification>

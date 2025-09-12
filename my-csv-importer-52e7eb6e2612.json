@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "my-csv-importer",
+  "private_key_id": "52e7eb6e26125047d07c5c0f91827ea75fd9a8fd",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCTYMRKXoqZbV9p\nPnlT1Yx2AuvdomxYWO3LOi3DXHf7JkcvQE2x4vs7buHvP9hTGn+Bm8qmhxH6pEjN\nGp+h7NCpJv0zzrTamVa+7PMs8cpgl6H+pArI/4SdAUV9kfdD7ebgqXxNLePjOyh2\nITtsRNqjDgBQMg12ZSbJXvgaWOy21mXXl2xjDEJcIazlEh7apJRsE0tscJDlmv2e\nCMn2xa5NMM3eI7vgCPX1UrDpRW4FN6EZXgrL/ZgyuRS+aRThTPSfVU/plUO3Udpq\nfIaqZBBFV9ovBW4xTvj1nkZSeUH/9kF7CkIwWEOIfxfSFS1z9cUahZ1Eve10GiQr\n4hfrBrOdAgMBAAECggEAJwK4wqTG1Dj2xfFzBSVkMkKws3CQdExJ2X8TaQB7g9/M\nfO3tAva9oKxHouBH/ytm7+RQnobnU+yTlrMC6UY5r2SyJjoDdk+bfhtTfSSdeLb6\neuBqOG0mabbR8ZynEnSRJgvG6tkIVvgsTCScyZpqMzn8DD5LgPjibPA2BSdftT+h\nSm5zmkH/LQAikoFt2Ll78ZOcuoJlH1wJT3yhzrJE7s/ezQBGLbcHg73VRUAvD5QP\nUe6BHEGHr8FbkRANhRanz34qnXGHynKaOWfokTb33ySyZMbiVJYaQJGsdNrJpS3z\nksItKFP9IZwMEwkPS6BTc9FzVc8ZSN2JO0DJGxJNcwKBgQDFaKBjfVLXgmXDMtSw\nHPK1d5V3SFQ8EtZQP2aEfPzavdA2TEji9B9nfYiRLVg/XfnXNIuURzUwFL6tLC20\n831nCXcTtj3eZHPDXE2VJvdB5qAky6jH/fVjRPeRFRZtNaVxE0jGaaijGKejTZ7/\nJMt+iQ5VyA/e37C46dXAMo2Q0wKBgQC/Hr3OUrRbTctqCYsaDB3thPxLCavfVJHq\n3MlQhEDpNSemXZ7qdAWi0kpGaVEIMxnElNVel+2eJXHSfPNI5BNodEYUa8VJ+p8J\nmqeoTwHM9YNC0jxdx7v5IPJtN42p9UW6S8PgGkiC9yH55Dnv73DjNqT1Mn09JYHG\nNaUB9h9jzwKBgGE4ieT1j5r7aUqc+gpR92ZPopjAUlvTmyCiWMbfF1hTKvvSzgKX\n3++D74IwJsnuamEGS8eW2ib30IBQxaHcWOIp0y8uDYI9TpXkG4FdU2BtSGlWs6Tq\n+bMOAC6/h+/4/6WUrb6pwpewSL8wNyHI6T9EGH8+rDJDUDGBV/fz7axpAoGADLb2\n2asW5JwgVEWeQ3Va6FpYjoVuMcVmj8FwgzLJPrqSkLbZw69EULi8yEJpaao8pJ9i\nMpDY9hR3phE5/jduMxzJLMKetXU+71yimsfmzsPmn6Ns8LBBCSnv9uQjQJNYuDQi\nK96TxGK8l+tfD19Wm0cfYlChlFfScmVPPPoqzHECgYBDhhed3FhWlfh3LSWhTlRA\ng1baNnbJy/03v0/vYpHON5q/ktndX4+STJzo6JQE3T3KS/vatDXmE35yeRfeaja0\nGfAGPbOhxZpTWv3lFMKu8zxFVGwA/uBTKZPP06EbNAsFokC+KJMeVs3GR4co36oV\noXTNl1J5JC+mzjTnXCba5Q==\n-----END PRIVATE KEY-----\n",
+  "client_email": "drive-importer-bot@my-csv-importer.iam.gserviceaccount.com",
+  "client_id": "117401248396316976187",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/drive-importer-bot%40my-csv-importer.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

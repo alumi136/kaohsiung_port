@@ -1,0 +1,59 @@
+<?php
+// 設置響應標頭為 JSON
+header('Content-Type: application/json; charset=utf-8');
+
+// 檢查請求方法是否為 POST
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // --- 設定 ---
+    // 收件人是伺服器上的 'jason_lee' 使用者。
+    // 在一台設定正確的郵件伺服器上，這會將郵件遞送到該本地使用者的信箱。
+    $to = "jason_lee"; 
+    
+    // --- 清理並獲取表單資料 ---
+    // 使用 filter_input 替代 $_POST 來增加安全性
+    $name = filter_input(INPUT_POST, 'name', FILTER_SANITIZE_STRING);
+    $from_email = filter_input(INPUT_POST, 'email', FILTER_SANITIZE_EMAIL);
+    $message = filter_input(INPUT_POST, 'message', FILTER_SANITIZE_STRING);
+
+    // --- 驗證表單資料 ---
+    if (empty($name) || empty($from_email) || !filter_var($from_email, FILTER_VALIDATE_EMAIL) || empty($message)) {
+        // 如果驗證失敗，發送錯誤響應
+        http_response_code(400);
+        echo json_encode(["status" => "error", "message" => "請填寫所有欄位並提供有效的 Email。"]);
+        exit;
+    }
+
+    // --- 組合郵件內容 ---
+    $subject = "=?UTF-8?B?".base64_encode("來自億欣報關行網站的留言 - 來自: $name")."?=";
+    
+    $email_content = "您收到一則來自億欣報關行網站的線上留言：\n\n";
+    $email_content .= "姓名: $name\n";
+    $email_content .= "Email: $from_email\n\n";
+    $email_content .= "留言內容:\n$message\n";
+
+    // --- 設定郵件標頭 ---
+    // 建議設定一個真實的 'From' 地址，避免被當成垃圾郵件
+    $headers = "From: webmaster@" . ($_SERVER['SERVER_NAME'] ?? 'localhost') . "\r\n";
+    $headers .= "Reply-To: $from_email\r\n";
+    $headers .= "Content-Type: text/plain; charset=UTF-8\r\n";
+    $headers .= "X-Mailer: PHP/" . phpversion();
+
+    // --- 發送郵件 ---
+    // mail() 函數的成功與否取決於伺服器的郵件設定（例如 sendmail 或 Postfix）
+    if (mail($to, $subject, $email_content, $headers)) {
+        // 如果郵件成功發送
+        http_response_code(200);
+        echo json_encode(["status" => "success", "message" => "感謝您的留言，我們將盡快與您聯繫！"]);
+    } else {
+        // 如果郵件發送失敗
+        http_response_code(500);
+        echo json_encode(["status" => "error", "message" => "抱歉，留言發送失敗，請檢查伺服器郵件設定或稍後再試。"]);
+    }
+
+} else {
+    // 如果不是 POST 請求，則拒絕存取
+    http_response_code(403);
+    echo json_encode(["status" => "error", "message" => "禁止存取。"]);
+}
+?>
+
