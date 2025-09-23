@@ -9,6 +9,8 @@ require_once 'config.php';
 // 使用 PhpSpreadsheet 相關類別
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Shared\Date;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 // 檢查使用者是否登入，否則導向到登入頁面
 if (!isset($_SESSION['user_id'])) {
@@ -19,6 +21,7 @@ if (!isset($_SESSION['user_id'])) {
 $message = '';
 $error = '';
 $warning = '';
+$import_errors = [];
 
 // --- 後端邏輯處理 ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -35,10 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $pdo->beginTransaction();
 
-            // 準備檢查重複的 statement
             $check_stmt = $pdo->prepare("SELECT id FROM daily_arrange WHERE bl_number = ? AND container_number = ?");
-            
-            // 準備插入新資料的 statement
             $insert_stmt = $pdo->prepare(
                 "INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status) 
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -50,33 +50,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             for ($row = 2; $row <= $highestRow; $row++) { 
                 $rowData = $sheet->rangeToArray('A' . $row . ':' . $sheet->getHighestColumn() . $row, NULL, TRUE, FALSE)[0];
                 
-                // 檢查是否為空行
                 if (count(array_filter($rowData)) == 0) continue;
 
                 $arrival_date = !empty($rowData[0]) ? Date::excelToDateTimeObject($rowData[0])->format('Y-m-d') : null;
                 $bl_number = $rowData[1] ?? null;
                 $container_number = $rowData[2] ?? null;
-                $vessel_code = $rowData[3] ?? null;
-                $vessel_name = $rowData[4] ?? null;
-                $quantity = $rowData[5] ?? 0;
-                $weight = $rowData[6] ?? 0;
+                $quantity = $rowData[5] ?? null;
                 $warehouse = $rowData[7] ?? null;
-                $remarks = $rowData[8] ?? null;
-                $status = 0; // 預設為未通關
-
-                // 檢查主單號和櫃號是否為空
-                if (empty($bl_number) || empty($container_number)) {
-                    $skipped_count++;
-                    continue;
-                }
-
-                // 檢查是否重複
-                $check_stmt->execute([$bl_number, $container_number]);
-                if ($check_stmt->fetch()) {
+                
+                // 【*** 新增邏輯：必填欄位驗證 ***】
+                $validation_error = '';
+                if (empty($arrival_date)) $validation_error = '到港日為空';
+                elseif (empty($bl_number)) $validation_error = '主單號為空';
+                elseif (empty($container_number)) $validation_error = '櫃號為空';
+                elseif (empty($quantity)) $validation_error = '總件數為空';
+                elseif (empty($warehouse)) $validation_error = '客戶配送別為空';
+                
+                if ($validation_error) {
+                    $import_errors[] = "第 {$row} 行錯誤: {$validation_error}，該行已略過。";
                     $skipped_count++;
                     continue;
                 }
                 
+                $check_stmt->execute([$bl_number, $container_number]);
+                if ($check_stmt->fetch()) {
+                    $import_errors[] = "第 {$row} 行錯誤: 主單號與櫃號組合已存在，該行已略過。";
+                    $skipped_count++;
+                    continue;
+                }
+                
+                // 只有通過所有驗證的資料才會被插入
+                $vessel_code = $rowData[3] ?? null;
+                $vessel_name = $rowData[4] ?? null;
+                $weight = $rowData[6] ?? 0;
+                $remarks = $rowData[8] ?? null;
+                $status = 0;
+
                 $insert_stmt->execute([$arrival_date, $bl_number, $container_number, $vessel_code, $vessel_name, $quantity, $weight, $warehouse, $remarks, $status]);
                 $imported_count++;
             }
@@ -84,27 +93,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->commit();
             $message = "成功匯入 {$imported_count} 筆資料。";
             if ($skipped_count > 0) {
-                $warning = "已略過 {$skipped_count} 筆重複或不完整的資料。";
+                // 將詳細錯誤資訊顯示給使用者
+                $error = "匯入過程中略過了 {$skipped_count} 筆資料，原因如下：<br>" . implode("<br>", array_slice($import_errors, 0, 5));
+                 if(count($import_errors) > 5) $error .= "<br>...還有更多錯誤未顯示。";
             }
         }
         // --- 新增資料 ---
         elseif ($action === 'add') {
-            $stmt = $pdo->prepare(
-                "INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)"
-            );
-            $stmt->execute([
-                $_POST['arrival_date'],
-                $_POST['bl_number'],
-                $_POST['container_number'],
-                $_POST['vessel_code'],
-                $_POST['vessel_name'],
-                $_POST['quantity'],
-                $_POST['weight'],
-                $_POST['warehouse'],
-                $_POST['remarks']
-            ]);
-            $message = '排櫃資料新增成功！';
+            // 【*** 新增邏輯：必填欄位驗證 ***】
+            if (empty($_POST['arrival_date']) || empty($_POST['bl_number']) || empty($_POST['container_number']) || empty($_POST['quantity']) || empty($_POST['warehouse'])) {
+                $error = '新增失敗：到港日、主單號、櫃號、總件數、客戶配送別為必填欄位！';
+            } else {
+                $stmt = $pdo->prepare(
+                    "INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)"
+                );
+                $stmt->execute([
+                    $_POST['arrival_date'],
+                    $_POST['bl_number'],
+                    $_POST['container_number'],
+                    $_POST['vessel_code'],
+                    $_POST['vessel_name'],
+                    $_POST['quantity'],
+                    $_POST['weight'],
+                    $_POST['warehouse'],
+                    $_POST['remarks']
+                ]);
+                $message = '排櫃資料新增成功！';
+            }
         }
         // --- 修改資料 ---
         elseif ($action === 'edit') {
@@ -149,26 +165,20 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])
     }
 }
 
-
 // --- 查詢與分頁 ---
 $records_per_page = 20;
 $current_page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $offset = ($current_page - 1) * $records_per_page;
-
 $where_clauses = [];
 $params = [];
 
-// 【更新】設定預設查詢日期
-// 如果頁面是初次載入（沒有任何 GET 參數），則設定預設日期範圍
 if (empty($_GET)) {
     $start_date = date('Y-m-d', strtotime('-2 days'));
     $end_date = date('Y-m-d', strtotime('+1 day'));
 } else {
-    // 否則，從 GET 參數中獲取日期，若無則為空
     $start_date = $_GET['start_date'] ?? '';
     $end_date = $_GET['end_date'] ?? '';
 }
-
 $keyword = $_GET['keyword'] ?? '';
 $advanced_display = isset($_GET['advanced_display']);
 
@@ -187,14 +197,11 @@ if (!empty($keyword)) {
 }
 
 $where_sql = count($where_clauses) > 0 ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
-
-// 查詢總筆數
 $total_stmt = $pdo->prepare("SELECT COUNT(*) FROM daily_arrange $where_sql");
 $total_stmt->execute($params);
 $total_records = $total_stmt->fetchColumn();
 $total_pages = ceil($total_records / $records_per_page);
 
-// 【更新】調整排序：依照到港日期升冪排序
 $data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY arrival_date ASC, id DESC LIMIT $records_per_page OFFSET $offset";
 $data_stmt = $pdo->prepare($data_sql);
 $data_stmt->execute($params);
@@ -210,32 +217,10 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Noto Sans TC', sans-serif; }
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.5);
-            align-items: center;
-            justify-content: center;
-        }
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
         .modal.active { display: flex; }
-        .modal-content {
-            background-color: #fefefe;
-            margin: auto;
-            padding: 20px;
-            border: 1px solid #888;
-            width: 80%;
-            max-width: 600px;
-            border-radius: 10px;
-        }
-        .form-input {
-            @apply mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm;
-        }
+        .modal-content { background-color: #fefefe; margin: auto; padding: 20px; border: 1px solid #888; width: 80%; max-width: 600px; border-radius: 10px; }
+        .form-input { @apply mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm; }
         .btn-primary { @apply inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700; }
         .btn-secondary { @apply inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-gray-700 bg-gray-200 hover:bg-gray-300; }
     </style>
@@ -245,12 +230,10 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 
     <h1 class="text-3xl font-bold mb-6 text-gray-800">排櫃總表操作</h1>
 
-    <!-- 訊息顯示區 -->
     <?php if ($message): ?><div class="mb-4 p-4 bg-green-100 text-green-700 rounded-lg"><?php echo $message; ?></div><?php endif; ?>
     <?php if ($error): ?><div class="mb-4 p-4 bg-red-100 text-red-700 rounded-lg"><?php echo $error; ?></div><?php endif; ?>
     <?php if ($warning): ?><div class="mb-4 p-4 bg-yellow-100 text-yellow-700 rounded-lg"><?php echo $warning; ?></div><?php endif; ?>
 
-    <!-- 查詢表單 -->
     <div class="mb-6 p-4 bg-gray-50 rounded-lg">
         <form action="arrange.php" method="GET" class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
             <div>
@@ -277,7 +260,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         </form>
     </div>
 
-    <!-- 結果表格 -->
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
@@ -311,7 +293,16 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 
                     <?php if ($advanced_display): ?>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-blue-600 font-semibold"><?php echo htmlspecialchars($row['inandout']); ?></td>
-                    <td class="px-3 py-4 whitespace-nowrap text-sm text-yellow-600 font-semibold"><?php echo htmlspecialchars($row['innoout']); ?></td>
+                    <td class="px-3 py-4 whitespace-nowrap text-sm">
+                        <!-- 【*** 新增邏輯：已進未出數字連結 ***】 -->
+                        <?php if ($row['innoout'] > 0): ?>
+                            <a href="innoout_details.php?bl_number=<?php echo urlencode($row['bl_number']); ?>" target="_blank" class="text-yellow-600 hover:text-yellow-800 underline font-bold">
+                                <?php echo htmlspecialchars($row['innoout']); ?>
+                            </a>
+                        <?php else: ?>
+                            <span class="font-semibold text-gray-500">0</span>
+                        <?php endif; ?>
+                    </td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-red-600 font-semibold"><?php echo htmlspecialchars($row['noin']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-gray-500 font-semibold"><?php echo htmlspecialchars($row['nodeclare']); ?></td>
                     <?php endif; ?>
@@ -332,7 +323,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         </table>
     </div>
 
-    <!-- 分頁 -->
     <div class="mt-4 flex justify-between items-center">
         <div class="text-sm text-gray-700">
             共 <?php echo $total_records; ?> 筆資料，目前在第 <?php echo $current_page; ?> / <?php echo $total_pages; ?> 頁
@@ -363,23 +353,20 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 </div>
 
-
-<!-- 新增 Modal -->
 <div id="addModal" class="modal">
     <div class="modal-content">
         <h2 class="text-2xl font-bold mb-4">新增排櫃資料</h2>
         <form action="arrange.php" method="POST">
             <input type="hidden" name="action" value="add">
-            <!-- form fields here... -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div><label>到港日期</label><input type="date" name="arrival_date" class="form-input" required></div>
-                <div><label>主單號</label><input type="text" name="bl_number" class="form-input" required></div>
-                <div><label>櫃號</label><input type="text" name="container_number" class="form-input" required></div>
+                <div><label>到港日期 (*)</label><input type="date" name="arrival_date" class="form-input" required></div>
+                <div><label>主單號 (*)</label><input type="text" name="bl_number" class="form-input" required></div>
+                <div><label>櫃號 (*)</label><input type="text" name="container_number" class="form-input" required></div>
                 <div><label>船掛</label><input type="text" name="vessel_code" class="form-input"></div>
                 <div><label>船名</label><input type="text" name="vessel_name" class="form-input"></div>
-                <div><label>總件數</label><input type="number" name="quantity" class="form-input"></div>
+                <div><label>總件數 (*)</label><input type="number" name="quantity" class="form-input" required></div>
                 <div><label>重量</label><input type="text" name="weight" class="form-input"></div>
-                <div><label>客戶配送別</label><input type="text" name="warehouse" class="form-input"></div>
+                <div><label>客戶配送別 (*)</label><input type="text" name="warehouse" class="form-input" required></div>
                 <div class="md:col-span-2"><label>備註</label><textarea name="remarks" class="form-input"></textarea></div>
             </div>
             <div class="mt-6 flex justify-end space-x-2">
@@ -390,7 +377,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 </div>
 
-<!-- 匯入 Modal -->
 <div id="importModal" class="modal">
     <div class="modal-content">
         <h2 class="text-2xl font-bold mb-4">從 Excel 匯入</h2>
@@ -399,7 +385,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
             <div>
                 <label for="csv_file" class="block text-sm font-medium text-gray-700">選擇 Excel 檔案 (.xlsx, .xls)</label>
                 <input type="file" name="csv_file" id="csv_file" required accept=".xlsx, .xls" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-                <p class="mt-2 text-xs text-gray-500">檔案格式需包含: 到港日期, 主單號, 櫃號, 船掛, 船名, 總件數, 重量, 客戶配送別, 備註。</p>
+                <p class="mt-2 text-xs text-gray-500">必填欄位: 到港日期, 主單號, 櫃號, 總件數, 客戶配送別。</p>
             </div>
             <div class="mt-6 flex justify-end space-x-2">
                 <button type="button" onclick="closeModal('importModal')" class="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">取消</button>
@@ -409,24 +395,21 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 </div>
 
-
-<!-- 修改 Modal -->
 <div id="editModal" class="modal">
     <div class="modal-content">
         <h2 class="text-2xl font-bold mb-4">修改排櫃資料</h2>
         <form action="arrange.php" method="POST">
             <input type="hidden" name="action" value="edit">
             <input type="hidden" name="id" id="edit-id">
-            <!-- form fields here... -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div><label>到港日期</label><input type="date" name="arrival_date" id="edit-arrival_date" class="form-input" required></div>
-                <div><label>主單號</label><input type="text" name="bl_number" id="edit-bl_number" class="form-input" required></div>
-                <div><label>櫃號</label><input type="text" name="container_number" id="edit-container_number" class="form-input" required></div>
+                <div><label>到港日期 (*)</label><input type="date" name="arrival_date" id="edit-arrival_date" class="form-input" required></div>
+                <div><label>主單號 (*)</label><input type="text" name="bl_number" id="edit-bl_number" class="form-input" required></div>
+                <div><label>櫃號 (*)</label><input type="text" name="container_number" id="edit-container_number" class="form-input" required></div>
                 <div><label>船掛</label><input type="text" name="vessel_code" id="edit-vessel_code" class="form-input"></div>
                 <div><label>船名</label><input type="text" name="vessel_name" id="edit-vessel_name" class="form-input"></div>
-                <div><label>總件數</label><input type="number" name="quantity" id="edit-quantity" class="form-input"></div>
+                <div><label>總件數 (*)</label><input type="number" name="quantity" id="edit-quantity" class="form-input" required></div>
                 <div><label>重量</label><input type="text" name="weight" id="edit-weight" class="form-input"></div>
-                <div><label>客戶配送別</label><input type="text" name="warehouse" id="edit-warehouse" class="form-input"></div>
+                <div><label>客戶配送別 (*)</label><input type="text" name="warehouse" id="edit-warehouse" class="form-input" required></div>
                 <div class="md:col-span-2"><label>備註</label><textarea name="remarks" id="edit-remarks" class="form-input"></textarea></div>
                 <div class="md:col-span-2">
                     <label>狀態</label>
@@ -448,11 +431,9 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     function openModal(modalId) {
         document.getElementById(modalId).classList.add('active');
     }
-
     function closeModal(modalId) {
         document.getElementById(modalId).classList.remove('active');
     }
-
     function openEditModal(data) {
         document.getElementById('edit-id').value = data.id;
         document.getElementById('edit-arrival_date').value = data.arrival_date;
@@ -468,7 +449,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         openModal('editModal');
     }
 </script>
-
 </body>
 </html>
 
