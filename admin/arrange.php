@@ -158,10 +158,18 @@ $offset = ($current_page - 1) * $records_per_page;
 $where_clauses = [];
 $params = [];
 
-$start_date = $_GET['start_date'] ?? '';
-$end_date = $_GET['end_date'] ?? '';
+// 【更新】設定預設查詢日期
+// 如果頁面是初次載入（沒有任何 GET 參數），則設定預設日期範圍
+if (empty($_GET)) {
+    $start_date = date('Y-m-d', strtotime('-2 days'));
+    $end_date = date('Y-m-d', strtotime('+1 day'));
+} else {
+    // 否則，從 GET 參數中獲取日期，若無則為空
+    $start_date = $_GET['start_date'] ?? '';
+    $end_date = $_GET['end_date'] ?? '';
+}
+
 $keyword = $_GET['keyword'] ?? '';
-// 【新】獲取進階顯示狀態
 $advanced_display = isset($_GET['advanced_display']);
 
 if (!empty($start_date)) {
@@ -186,8 +194,8 @@ $total_stmt->execute($params);
 $total_records = $total_stmt->fetchColumn();
 $total_pages = ceil($total_records / $records_per_page);
 
-// 查詢當頁資料
-$data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY arrival_date DESC, id DESC LIMIT $records_per_page OFFSET $offset";
+// 【更新】調整排序：依照到港日期升冪排序
+$data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY arrival_date ASC, id DESC LIMIT $records_per_page OFFSET $offset";
 $data_stmt = $pdo->prepare($data_sql);
 $data_stmt->execute($params);
 $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -257,7 +265,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                 <label for="keyword" class="block text-sm font-medium text-gray-700 mb-1">關鍵字查詢</label>
                 <input type="text" name="keyword" id="keyword" class="form-input" placeholder="主單號 / 櫃號 / 船名" value="<?php echo htmlspecialchars($keyword); ?>">
             </div>
-            <!-- 【新】進階顯示核取方塊 -->
             <div class="flex items-center pb-2 self-center mt-4">
                 <input type="checkbox" name="advanced_display" id="advanced_display" value="1" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" <?php if ($advanced_display) echo 'checked'; ?>>
                 <label for="advanced_display" class="ml-2 block text-sm text-gray-900">進階顯示</label>
@@ -281,7 +288,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">船名</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">總件數</th>
                     
-                    <!-- 【新】條件化顯示的表頭 -->
                     <?php if ($advanced_display): ?>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">已進已出</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">已進未出</th>
@@ -303,7 +309,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['vessel_name']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['quantity']); ?></td>
 
-                    <!-- 【新】條件化顯示的資料欄位 -->
                     <?php if ($advanced_display): ?>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-blue-600 font-semibold"><?php echo htmlspecialchars($row['inandout']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-yellow-600 font-semibold"><?php echo htmlspecialchars($row['innoout']); ?></td>
@@ -335,7 +340,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         <div>
             <?php if ($total_pages > 1): ?>
                 <?php
-                    // 【新】確保分頁連結會帶上進階顯示的參數
                     $base_query_params = [
                         'start_date' => $start_date,
                         'end_date' => $end_date,
