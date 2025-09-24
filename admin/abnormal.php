@@ -2,7 +2,7 @@
 // 啟動 session
 session_start();
 
-// ver1.0--- 檢查使用者是否已登入的邏輯 ---
+// --- 檢查使用者是否已登入的邏輯 ---
 if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true) {
     // 將使用者導向到登入頁面
     header('Location: login.php');
