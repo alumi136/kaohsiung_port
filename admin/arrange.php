@@ -200,8 +200,7 @@ $total_stmt->execute($params);
 $total_records = $total_stmt->fetchColumn();
 $total_pages = ceil($total_records / $records_per_page);
 
-// 【更新】調整排序：依照資料庫預設順序 (ID 降冪) 排列
-$data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY id DESC LIMIT $records_per_page OFFSET $offset";
+$data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY arrival_date ASC, id DESC LIMIT $records_per_page OFFSET $offset";
 $data_stmt = $pdo->prepare($data_sql);
 $data_stmt->execute($params);
 $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
