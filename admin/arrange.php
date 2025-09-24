@@ -52,19 +52,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 if (count(array_filter($rowData)) == 0) continue;
 
-                $arrival_date = !empty($rowData[0]) ? Date::excelToDateTimeObject($rowData[0])->format('Y-m-d') : null;
-                $bl_number = $rowData[1] ?? null;
-                $container_number = $rowData[2] ?? null;
-                $quantity = $rowData[5] ?? null;
-                $warehouse = $rowData[7] ?? null;
+                // 【*** 邏輯修正：更新為正確的 Excel 欄位對應 ***】
+                $arrival_date = !empty($rowData[0]) ? Date::excelToDateTimeObject($rowData[0])->format('Y-m-d') : null; // A欄
+                $bl_number = $rowData[1] ?? null;        // B欄
+                $container_number = $rowData[2] ?? null; // C欄
+                $vessel_code = $rowData[4] ?? null;      // E欄
+                $vessel_name = $rowData[5] ?? null;      // F欄
+                $quantity = $rowData[7] ?? null;         // H欄
+                $weight = $rowData[8] ?? 0;              // I欄
+                $warehouse = $rowData[9] ?? null;        // J欄
+                $remarks = $rowData[10] ?? null;         // K欄
                 
-                // 【*** 新增邏輯：必填欄位驗證 ***】
+                // 必填欄位驗證 (使用修正後的變數)
                 $validation_error = '';
                 if (empty($arrival_date)) $validation_error = '到港日為空';
-                elseif (empty($bl_number)) $validation_error = '主單號為空';
+                elseif (empty($bl_number)) $validation_error = '主單號(提單)為空';
                 elseif (empty($container_number)) $validation_error = '櫃號為空';
-                elseif (empty($quantity)) $validation_error = '總件數為空';
-                elseif (empty($warehouse)) $validation_error = '客戶配送別為空';
+                elseif (empty($quantity)) $validation_error = '數量為空';
+                elseif (empty($warehouse)) $validation_error = '統倉(客戶配送別)為空';
                 
                 if ($validation_error) {
                     $import_errors[] = "第 {$row} 行錯誤: {$validation_error}，該行已略過。";
@@ -79,12 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     continue;
                 }
                 
-                // 只有通過所有驗證的資料才會被插入
-                $vessel_code = $rowData[3] ?? null;
-                $vessel_name = $rowData[4] ?? null;
-                $weight = $rowData[6] ?? 0;
-                $remarks = $rowData[8] ?? null;
-                $status = 0;
+                $status = 0; // 預設為未通關
 
                 $insert_stmt->execute([$arrival_date, $bl_number, $container_number, $vessel_code, $vessel_name, $quantity, $weight, $warehouse, $remarks, $status]);
                 $imported_count++;
@@ -93,14 +93,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->commit();
             $message = "成功匯入 {$imported_count} 筆資料。";
             if ($skipped_count > 0) {
-                // 將詳細錯誤資訊顯示給使用者
                 $error = "匯入過程中略過了 {$skipped_count} 筆資料，原因如下：<br>" . implode("<br>", array_slice($import_errors, 0, 5));
                  if(count($import_errors) > 5) $error .= "<br>...還有更多錯誤未顯示。";
             }
         }
         // --- 新增資料 ---
         elseif ($action === 'add') {
-            // 【*** 新增邏輯：必填欄位驗證 ***】
             if (empty($_POST['arrival_date']) || empty($_POST['bl_number']) || empty($_POST['container_number']) || empty($_POST['quantity']) || empty($_POST['warehouse'])) {
                 $error = '新增失敗：到港日、主單號、櫃號、總件數、客戶配送別為必填欄位！';
             } else {
@@ -172,7 +170,7 @@ $offset = ($current_page - 1) * $records_per_page;
 $where_clauses = [];
 $params = [];
 
-if (empty($_GET)) {
+if (empty($_GET) || (!isset($_GET['search']) && !isset($_GET['page']))) {
     $start_date = date('Y-m-d', strtotime('-2 days'));
     $end_date = date('Y-m-d', strtotime('+1 day'));
 } else {
@@ -294,13 +292,12 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php if ($advanced_display): ?>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-blue-600 font-semibold"><?php echo htmlspecialchars($row['inandout']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm">
-                        <!-- 【*** 新增邏輯：已進未出數字連結 ***】 -->
                         <?php if ($row['innoout'] > 0): ?>
                             <a href="innoout_details.php?bl_number=<?php echo urlencode($row['bl_number']); ?>" target="_blank" class="text-yellow-600 hover:text-yellow-800 underline font-bold">
                                 <?php echo htmlspecialchars($row['innoout']); ?>
                             </a>
                         <?php else: ?>
-                            <span class="font-semibold text-gray-500">0</span>
+                            <span class="font-semibold text-gray-500"><?php echo htmlspecialchars($row['innoout'] ?? '0'); ?></span>
                         <?php endif; ?>
                     </td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-red-600 font-semibold"><?php echo htmlspecialchars($row['noin']); ?></td>
@@ -315,7 +312,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     </td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm font-medium">
                         <button onclick='openEditModal(<?php echo json_encode($row); ?>)' class="text-indigo-600 hover:text-indigo-900">編輯</button>
-                        <a href="?action=delete&id=<?php echo $row['id']; ?>" onclick="return confirm('確定要刪除這筆資料嗎？')" class="text-red-600 hover:text-red-900 ml-4">刪除</a>
+                        <a href="?action=delete&id=<?php echo $row['id']; ?>&page=<?php echo $current_page; ?>&start_date=<?php echo $start_date; ?>&end_date=<?php echo $end_date; ?>&keyword=<?php echo $keyword; ?>" onclick="return confirm('確定要刪除這筆資料嗎？')" class="text-red-600 hover:text-red-900 ml-4">刪除</a>
                     </td>
                 </tr>
                 <?php endforeach; ?>
@@ -385,7 +382,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
             <div>
                 <label for="csv_file" class="block text-sm font-medium text-gray-700">選擇 Excel 檔案 (.xlsx, .xls)</label>
                 <input type="file" name="csv_file" id="csv_file" required accept=".xlsx, .xls" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-                <p class="mt-2 text-xs text-gray-500">必填欄位: 到港日期, 主單號, 櫃號, 總件數, 客戶配送別。</p>
+                <p class="mt-2 text-xs text-gray-500">必填欄位: 到港日期, 主單號(提單), 櫃號, 數量, 統倉(客戶配送別)。</p>
             </div>
             <div class="mt-6 flex justify-end space-x-2">
                 <button type="button" onclick="closeModal('importModal')" class="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">取消</button>
