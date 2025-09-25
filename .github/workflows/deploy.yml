@@ -20,7 +20,7 @@ jobs:
         host: ${{ secrets.SSH_HOST }}
         username: ${{ secrets.SSH_USERNAME }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
-        port: ${{ secrets.SSH_PORT }}
+        port: 2202
         script: |
           # 進入網站目錄
           cd /var/www/html
