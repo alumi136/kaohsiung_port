@@ -23,12 +23,12 @@ jobs:
         port: ${{ secrets.SSH_PORT }}
         script: |
           # 使用 ssh:// 協議格式來指定 port
-          git remote set-url kaohsiung_port ssh://git@galloptek.com:2202/var/www/html/.git
-          git fetch kaohsiung_port  
+          #git remote set-url kaohsiung_port ssh://git@galloptek.com:2202/var/www/html/.git
+          #git fetch kaohsiung_port  
           # 進入網站目錄
           cd /var/www/html
-          git fetch --all
-          git reset --hard origin/main
+          #git fetch --all
+          #git reset --hard origin/main
           git pull
           # 從 GitHub 拉取最新的 main 分支程式碼
           # git pull origin main
