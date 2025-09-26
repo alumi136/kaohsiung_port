@@ -14,11 +14,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3 # 第一步：拉取你的 GitHub 儲存庫程式碼
 
-    - name: Fetch from custom remote
-       run: |
-          # 使用 ssh:// 協議格式來指定 port
-          git remote set-url kaohsiung_port ssh://git@galloptek.com:2202/var/www/html/.git
-          git fetch kaohsiung_port  
     - name: Deploy to Server
       uses: appleboy/ssh-action@master
       with:
@@ -27,6 +22,9 @@ jobs:
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         port: ${{ secrets.SSH_PORT }}
         script: |
+          # 使用 ssh:// 協議格式來指定 port
+          git remote set-url kaohsiung_port ssh://git@galloptek.com:2202/var/www/html/.git
+          git fetch kaohsiung_port  
           # 進入網站目錄
           cd /var/www/html
           git fetch --all
