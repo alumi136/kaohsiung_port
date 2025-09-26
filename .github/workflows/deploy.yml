@@ -31,7 +31,7 @@ jobs:
           #git reset --hard origin/main
           git pull
           # 從 GitHub 拉取最新的 main 分支程式碼
-          # git pull origin main
+          git pull origin main
           # (可選) 根據您的專案需求，在這裡加入其他指令
           # 例如：安裝 PHP 套件
           # composer install --no-dev --optimize-autoloader
