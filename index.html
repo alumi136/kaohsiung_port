@@ -1,172 +1,387 @@
-<?php
-session_start();
-// 引用資料庫設定檔以進行查詢
-require_once 'config.php';
-
-// 檢查使用者是否登入，否則導向到登入頁面
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
-    exit();
-}
-
-// 登出邏輯
-if (isset($_GET['logout'])) {
-    session_destroy();
-    header("Location: login.php");
-    exit();
-}
-
-// --- 跑馬燈資料計算 ---
-$marquee_text = '';
-try {
-    // 計算「已進未出」的累計總和
-    // 我們只計算 status = 0 (未通關) 的資料
-    $stmt_innoout = $pdo->query("
-        SELECT
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 5 DAY THEN innoout ELSE 0 END) AS total_5,
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 7 DAY THEN innoout ELSE 0 END) AS total_7,
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 14 DAY THEN innoout ELSE 0 END) AS total_14
-        FROM daily_arrange
-        WHERE status = 0
-    ");
-    $innoout_totals = $stmt_innoout->fetch(PDO::FETCH_ASSOC);
-
-    // 計算「已申報未進倉」的累計總和
-    $stmt_noin = $pdo->query("
-        SELECT
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 5 DAY THEN noin ELSE 0 END) AS total_5,
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 7 DAY THEN noin ELSE 0 END) AS total_7,
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 14 DAY THEN noin ELSE 0 END) AS total_14
-        FROM daily_arrange
-        WHERE status = 0
-    ");
-    $noin_totals = $stmt_noin->fetch(PDO::FETCH_ASSOC);
-
-    // 組合跑馬燈文字
-    $innoout_text = sprintf(
-        "已進未出件數: 5日前共 %d 件, 7日前共 %d 件, 14日前共 %d 件",
-        $innoout_totals['total_5'] ?? 0,
-        $innoout_totals['total_7'] ?? 0,
-        $innoout_totals['total_14'] ?? 0
-    );
-
-    $noin_text = sprintf(
-        "已申報未進倉件數: 5日前共 %d 件, 7日前共 %d 件, 14日前共 %d 件",
-        $noin_totals['total_5'] ?? 0,
-        $noin_totals['total_7'] ?? 0,
-        $noin_totals['total_14'] ?? 0
-    );
-
-    $marquee_text = $innoout_text . '； ' . $noin_text;
-
-} catch (PDOException $e) {
-    // 如果資料庫查詢失敗，顯示預設訊息
-    $marquee_text = "歡迎使用本系統，警示資訊載入失敗。";
-    // 可以選擇性地將錯誤記錄到日誌中
-    // error_log("Marquee data query failed: " . $e->getMessage());
-}
-?>
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>高雄海運快遞管理系統 - 後台</title>
+    <title>億欣報關有限公司 - 專業海運快遞通關服務</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Noto Sans TC', sans-serif; }
-        .sidebar-link {
-            display: flex;
-            align-items: center;
-            padding: 0.75rem 1.25rem;
-            color: #d1d5db; /* gray-300 */
-            border-radius: 0.5rem;
-            transition: all 0.2s ease-in-out;
+        /* ver1.1 使用 Noto Sans TC 作為主要中文字體，Inter 作為英數字體 */
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
         }
-        .sidebar-link:hover {
-            background-color: #374151; /* gray-700 */
-            color: white;
+        /* 確保 Iframe 在手機上有好的顯示效果 */
+        .responsive-iframe-container {
+            position: relative;
+            overflow: hidden;
+            padding-top: 120%; /* 根據 search1.php 內容高度調整比例 */
         }
-        .sidebar-link.active {
-            background-color: #4f46e5; /* indigo-600 */
-            color: white;
-            font-weight: 500;
+        .responsive-iframe-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
         }
-        .sidebar-link .icon {
-            margin-right: 0.75rem;
-            width: 1.25rem;
-            height: 1.25rem;
+        /* FAQ 收合效果 */
+        .accordion-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
         }
     </style>
 </head>
-<body class="bg-gray-100">
-    <div class="flex h-screen">
-        <!-- Sidebar -->
-        <aside class="w-64 bg-gray-800 text-white flex flex-col">
-            <div class="h-16 flex items-center justify-center text-xl font-bold border-b border-gray-700">
-                高雄海運快遞管理系統
-            </div>
-            <nav class="flex-1 p-4 space-y-2">
-                <a href="dashboard.php" class="sidebar-link active" target="contentFrame">
-                    <span class="icon">🏠</span> 儀表板
-		</a>
-		<a href="arrange.php" class="sidebar-link" target="contentFrame">
-                    <span class="icon">📦</span> 排櫃操作
-                </a>
-                <a href="upload.php" class="sidebar-link" target="contentFrame">
-                    <span class="icon">📤</span> 每日通關資料上傳
-                </a>
-                <a href="search.php" class="sidebar-link" target="contentFrame">
-                    <span class="icon">🔍</span> 通關狀態查詢
-                </a>
-                <a href="update.php" class="sidebar-link" target="contentFrame">
-                    <span class="icon">✏️</span> 異常件更新
-                </a>
-                <a href="abnormal.php" class="sidebar-link" target="contentFrame">
-                    <span class="icon">✏️</span> 異常件查詢
-                </a>
-		<a href="account.php" class="sidebar-link" target="contentFrame">
-                    <span class="icon">👤</span> 帳號管理
-                </a>
-            </nav>
-        </aside>
+<body class="bg-gray-50 text-gray-800">
 
-        <!-- Main Content -->
-        <div class="flex-1 flex flex-col">
-            <header class="h-16 bg-white shadow-md flex items-center justify-between px-6">
-                <!-- 【*** 新增跑馬燈功能 ***】 -->
-                <div class="flex-1 text-red-600 font-semibold overflow-hidden">
-                    <marquee behavior="scroll" direction="left" scrollamount="6">
-                        <?php echo htmlspecialchars($marquee_text); ?>
-                    </marquee>
+    <header class="bg-white shadow-md sticky top-0 z-50">
+        <nav class="container mx-auto px-6 py-4 flex justify-between items-center">
+            <div class="text-2xl font-bold text-blue-900">
+                億欣報關有限公司
+            </div>
+            <div class="hidden md:flex space-x-8">
+                <a href="#search" class="text-gray-600 hover:text-blue-700 transition duration-300">通關狀態查詢</a>
+                <a href="#faq" class="text-gray-600 hover:text-blue-700 transition duration-300">問題集</a>
+                <a href="#downloads" class="text-gray-600 hover:text-blue-700 transition duration-300">文件下載</a>
+                <a href="#contact" class="text-gray-600 hover:text-blue-700 transition duration-300">聯繫我們</a>
+            </div>
+            <div class="md:hidden">
+                <button id="mobile-menu-button" class="text-gray-600 focus:outline-none">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
+                </button>
+            </div>
+        </nav>
+        <div id="mobile-menu" class="hidden md:hidden px-6 pt-2 pb-4">
+            <a href="#search" class="block py-2 text-gray-600 hover:text-blue-700">通關狀態查詢</a>
+            <a href="#faq" class="block py-2 text-gray-600 hover:text-blue-700">問題集</a>
+            <a href="#downloads" class="block py-2 text-gray-600 hover:text-blue-700">文件下載</a>
+            <a href="#contact" class="block py-2 text-gray-600 hover:text-blue-700">聯繫我們</a>
+        </div>
+    </header>
+
+    <main>
+        <section class="bg-blue-900 text-white text-center py-20 px-6">
+            <h1 class="text-4xl md:text-5xl font-bold mb-4">億欣報關有限公司</h1>
+            <p class="text-lg md:text-xl text-blue-200">跨境電商平台貨物通關夥伴</p>
+        </section>
+
+        <section id="search" class="py-16 md:py-24 bg-white">
+            <div class="container mx-auto px-6">
+                
+                <div class="max-w-4xl mx-auto mb-12 bg-yellow-100 border-l-4 border-yellow-500 text-yellow-800 p-4 rounded-md shadow" role="alert">
+                    <p class="font-bold">公告通知:</p>
+                    <p>請廣眾的申報人/收件人請注意，自9/22開始因受颱風氣候影響，貨物在9/25之後才陸續到達台灣，再加上9/29國定假日沒有通關，目前是要排隊通關，導致已經到港的貨物通關時效延長，請您耐心等候，謝謝。</p>
                 </div>
-                <div class="flex items-center pl-4">
-                    <span class="text-gray-700 mr-4">
-                        你好, <?php echo htmlspecialchars($_SESSION['user_full_name']); ?>
-                    </span>
-                    <a href="?logout=1" class="text-sm text-red-500 hover:text-red-700">登出</a>
+
+                <h2 class="text-3xl font-bold text-center mb-12 text-gray-900">通關狀態查詢</h2>
+                <div class="max-w-3xl mx-auto bg-gray-50 rounded-xl shadow-lg overflow-hidden">
+                    <iframe src="search1.php" class="w-full h-[600px] border-0" title="通關狀態查詢"></iframe>
                 </div>
-            </header>
-            <main class="flex-1 p-6">
-                <iframe name="contentFrame" src="dashboard.php" class="w-full h-full border-0 rounded-lg bg-white shadow-inner"></iframe>
-            </main>
+            </div>
+        </section>
+
+        <section id="faq" class="py-16 md:py-24 bg-gray-50">
+            <div class="container mx-auto px-6 max-w-4xl">
+                <div class="text-center mb-12 flex justify-center items-center gap-4">
+                    <h2 class="text-3xl font-bold text-gray-900">常見問題集</h2>
+                    <a href="#" id="open-faq-modal" class="text-lg text-blue-600 hover:text-blue-800 underline transition duration-300">更多問題解答</a>
+                </div>
+                <div class="space-y-4" id="faq-accordion">
+                    <div class="bg-white rounded-lg shadow-md">
+                        <button class="accordion-header w-full flex justify-between items-center text-left p-5 font-semibold text-gray-800 focus:outline-none">
+                            <span>我要更改預先委任的品名及金額，請問要如何操作?</span>
+                            <svg class="w-6 h-6 transform transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </button>
+                        <div class="accordion-content">
+                            <p class="p-5 pt-0 text-gray-600">尚未通關前若是要修改預先委任或是報關內容，建議您聯繫國外集運商進行修正會比較快速。因為我們報關行所有資料皆來自於國際出口方，我們只是將出口方提供的資料向海關進行進口申報，不會做任何修改。我們也可以協助修改，但因為我們必須要確認您是貨物購買本人，否則會有偽造文書的刑事責任問題，所以要請您使用 email 提供以下資料：申報人身分證正反面複印件(基於安全，你可以寫上"僅提供報關使用"字眼)、分提單號碼、電商平台上的訂單截圖（以確認是您本人購買）、申報人姓名、手機號碼、申報人同意書及委任書(請在我們網路上下載並簽名蓋章)等文件。</p>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-md">
+                        <button class="accordion-header w-full flex justify-between items-center text-left p-5 font-semibold text-gray-800 focus:outline-none">
+                            <span> EZWAY 上的稅金是 110 元，為何物流業者跟我收取 155 元，而且物流配送業者說是稅金?</span>
+                             <svg class="w-6 h-6 transform transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </button>
+                        <div class="accordion-content">
+                            <p class="p-5 pt-0 text-gray-600"> 在此我們鄭重聲明，本公司只負責進口報關申報，通關完成並將貨物交給台灣配送物流業者之後，我們的服務即已結束。關於物流業者向您收取的費用金額，並非由本公司指定，您需要向大陸集運商及台灣配送物流業者了解詳情。</p>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow-md">
+                        <button class="accordion-header w-full flex justify-between items-center text-left p-5 font-semibold text-gray-800 focus:outline-none">
+                            <span>我的貨物被查驗，要求提供委任書正本紙本資料，請問正本資料要寄往何處?</span>
+                             <svg class="w-6 h-6 transform transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </button>
+                        <div class="accordion-content">
+                            <p class="p-5 pt-0 text-gray-600">轉正式報關需要委任書正本資料及身分證反面複印件等文件提供給海關（基於安全，您可以在複印件上註明”僅提供報關使用”字眼）。請將正本資料寄到以下地址：
+806043 高雄市前鎮區鎮港路18號 第63碼頭
+海運快遞倉 收 (轉 億欣報關 & 駐棧海關)
+電話: 07-7227448。並請在信封袋上寫上 “※分提單號 (XXXX)” 以便我們對應您的資料，謝謝。</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="downloads" class="py-16 md:py-24 bg-white">
+            <div class="container mx-auto px-6 max-w-4xl">
+                <h2 class="text-3xl font-bold text-center mb-12 text-gray-900">文件下載</h2>
+                <div class="grid md:grid-cols-2 gap-6">
+                    <div class="bg-gray-50 p-6 rounded-lg shadow-sm flex justify-between items-center">
+                        <div>
+                            <h3 class="font-semibold text-lg">個案委任書</h3>
+                            <p class="text-gray-600 text-sm">簡報轉正式報關所需之表格。</p>
+                        </div>
+                        <a href="download/01.doc" download class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition duration-300">下載</a>
+                    </div>
+                    <div class="bg-gray-50 p-6 rounded-lg shadow-sm flex justify-between items-center">
+                        <div>
+                            <h3 class="font-semibold text-lg">個人自用切結書</h3>
+                            <p class="text-gray-600 text-sm">申請個人自用表格。</p>
+                        </div>
+                        <a href="download/02.docx" download class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition duration-300">下載</a>
+                    </div>
+		    <div class="bg-gray-50 p-6 rounded-lg shadow-sm flex justify-between items-center">
+                        <div>
+                            <h3 class="font-semibold text-lg">放棄書</h3>
+                            <p class="text-gray-600 text-sm">申請放棄所需表格。</p>
+                        </div>
+                        <a href="download/04.pdf" download class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition duration-300">下載</a>
+                    </div>
+                   <div class="bg-gray-50 p-6 rounded-lg shadow-sm flex justify-between items-center">
+                        <div>
+                            <h3 class="font-semibold text-lg">貨物部分放行及放棄申請書</h3>
+                            <p class="text-gray-600 text-sm">申請部分所需表格。</p>
+                        </div>
+                        <a href="download/03.doc" download class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition duration-300">下載</a>
+                    </div>
+ 
+                </div>
+            </div>
+        </section>
+
+        <section id="contact" class="py-16 md:py-24 bg-gray-800 text-white">
+            <div class="container mx-auto px-6">
+                <h2 class="text-3xl font-bold text-center mb-12">聯繫我們</h2>
+                <div class="grid md:grid-cols-2 gap-12">
+                    <div class="space-y-6">
+                        <div>
+                            <h3 class="text-xl font-semibold mb-2 text-blue-300">公司資訊</h3>
+                            <p>地址：806 高雄市前鎮區廣東三街400巷15號</p>
+			    <p>文件寄送地址：806 高雄市前鎮區鎮港路18號</p>
+			    <p>第63碼頭 海運快遞倉 收 (轉 億欣報關 & 駐棧海關) ※分提單號 (XXXX)</p>
+                            <p>電話：(07)7227488 </p>
+                            <p>Email: jason_lee@galloptek.com</p>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-semibold mb-2 text-blue-300">營業時間</h3>
+                            <p>週一至週五：09:00 - 17:00</p>
+                            <p>週六、週日及國定假日休息</p>
+                        </div>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-semibold mb-4 text-blue-300">線上留言</h3>
+                        <form id="contact-form" class="space-y-4">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label for="name" class="block mb-1 font-medium">您的中文姓名</label>
+                                    <input type="text" id="name" name="name" required class="w-full p-2 rounded-md bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label for="phone" class="block mb-1 font-medium">手機號碼</label>
+                                    <input type="tel" id="phone" name="phone" required class="w-full p-2 rounded-md bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label for="email" class="block mb-1 font-medium">您的 Email</label>
+                                    <input type="email" id="email" name="email" required class="w-full p-2 rounded-md bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                 <div>
+                                    <label for="house_bl" class="block mb-1 font-medium">分提單號</label>
+                                    <input type="text" id="house_bl" name="house_bl" class="w-full p-2 rounded-md bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-400 !-mt-2">請提供申報人真實資料以便確認是本人才能受理</p>
+                            
+                            <div>
+                                <label for="inquiry_type" class="block mb-1 font-medium">問題類型</label>
+                                <select id="inquiry_type" name="inquiry_type" required class="w-full p-2 rounded-md bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    <option value="" disabled selected>請選擇問題類型...</option>
+                                    <option value="預委任修改">預委任修改</option>
+                                    <option value="轉正報問題">轉正報問題</option>
+                                    <option value="稅金問題">稅金問題</option>
+                                    <option value="其他">其他</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="message" class="block mb-1 font-medium">留言內容</label>
+                                <textarea id="message" name="message" rows="5" required class="w-full p-2 rounded-md bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                            </div>
+                            <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-md hover:bg-blue-700 transition duration-300 font-bold">送出留言</button>
+                        </form>
+                        <div id="form-success-message" class="hidden mt-4 p-4 bg-green-600 text-white rounded-md"></div>
+                        <div id="form-error-message" class="hidden mt-4 p-4 bg-red-600 text-white rounded-md"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div id="faq-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 z-[100] flex justify-center items-center p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl h-[90vh] flex flex-col">
+            <div class="flex justify-between items-center p-4 border-b border-gray-200">
+                <h3 class="text-lg font-semibold text-gray-800">完整問題集</h3>
+                <button id="close-faq-modal" class="text-gray-500 hover:text-gray-900 text-3xl font-light focus:outline-none">&times;</button>
+            </div>
+            <div class="p-2 flex-grow">
+                <iframe src="faq.html" class="w-full h-full" style="border:0;" title="完整問題集"></iframe>
+            </div>
         </div>
     </div>
 
+    <footer class="bg-gray-900 text-gray-400 text-center py-6">
+        <p>&copy; 2024 億欣報關有限公司. All Rights Reserved.</p>
+    </footer>
+
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const links = document.querySelectorAll('.sidebar-link');
-            links.forEach(link => {
-                link.addEventListener('click', function() {
-                    // 移除所有連結的 active class
-                    links.forEach(l => l.classList.remove('active'));
-                    // 為被點擊的連結加上 active class
-                    this.classList.add('active');
+        document.addEventListener('DOMContentLoaded', function () {
+            // Mobile menu toggle
+            const mobileMenuButton = document.getElementById('mobile-menu-button');
+            const mobileMenu = document.getElementById('mobile-menu');
+            mobileMenuButton.addEventListener('click', () => {
+                mobileMenu.classList.toggle('hidden');
+            });
+
+            // Close mobile menu when a link is clicked
+            const mobileLinks = mobileMenu.querySelectorAll('a');
+            mobileLinks.forEach(link => {
+                link.addEventListener('click', () => {
+                    mobileMenu.classList.add('hidden');
+                });
+            });
+
+            // FAQ Accordion
+            const accordionHeaders = document.querySelectorAll('.accordion-header');
+            accordionHeaders.forEach(header => {
+                header.addEventListener('click', () => {
+                    const content = header.nextElementSibling;
+                    const icon = header.querySelector('svg');
+
+                    // Close all other accordions
+                    document.querySelectorAll('.accordion-content').forEach(item => {
+                        if (item !== content) {
+                            item.style.maxHeight = null;
+                            item.previousElementSibling.querySelector('svg').classList.remove('rotate-180');
+                        }
+                    });
+
+                    // Toggle current accordion
+                    if (content.style.maxHeight) {
+                        content.style.maxHeight = null;
+                        icon.classList.remove('rotate-180');
+                    } else {
+                        content.style.maxHeight = content.scrollHeight + "px";
+                        icon.classList.add('rotate-180');
+                    }
+                });
+            });
+
+            // ** FAQ Modal Logic Start **
+            const faqModal = document.getElementById('faq-modal');
+            const openFaqModalLink = document.getElementById('open-faq-modal');
+            const closeFaqModalButton = document.getElementById('close-faq-modal');
+
+            const openModal = () => {
+                faqModal.classList.remove('hidden');
+                document.body.style.overflow = 'hidden'; // Prevent background scrolling
+            };
+
+            const closeModal = () => {
+                faqModal.classList.add('hidden');
+                document.body.style.overflow = ''; // Restore background scrolling
+            };
+
+            openFaqModalLink.addEventListener('click', (event) => {
+                event.preventDefault();
+                openModal();
+            });
+
+            closeFaqModalButton.addEventListener('click', closeModal);
+
+            // Close modal if user clicks on the background overlay
+            faqModal.addEventListener('click', (event) => {
+                if (event.target === faqModal) {
+                    closeModal();
+                }
+            });
+            
+            // Close modal with Escape key
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && !faqModal.classList.contains('hidden')) {
+                    closeModal();
+                }
+            });
+            // ** FAQ Modal Logic End **
+
+            // ** 更新後的聯繫表單提交邏輯 **
+            const contactForm = document.getElementById('contact-form');
+            const successMessage = document.getElementById('form-success-message');
+            const errorMessage = document.getElementById('form-error-message');
+            
+            contactForm.addEventListener('submit', function (e) {
+                e.preventDefault(); // 防止表單的默認提交行為
+
+                const submitButton = contactForm.querySelector('button[type="submit"]');
+                const originalButtonText = submitButton.innerHTML;
+                submitButton.innerHTML = '傳送中...';
+                submitButton.disabled = true;
+
+                // 隱藏舊的訊息
+                successMessage.classList.add('hidden');
+                errorMessage.classList.add('hidden');
+
+                const formData = new FormData(contactForm);
+
+                // 使用 Fetch API 將表單資料發送到後端 PHP
+                fetch('send_mail.php', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    // 檢查響應是否成功
+                    if (!response.ok) {
+                        // 如果伺服器返回錯誤（如 400, 500），則拋出錯誤以便 catch 區塊捕獲
+                        return response.json().then(err => { throw new Error(err.message || '伺服器發生錯誤。') });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        successMessage.textContent = data.message;
+                        successMessage.classList.remove('hidden');
+                        contactForm.reset();
+                        setTimeout(() => {
+                            successMessage.classList.add('hidden');
+                        }, 5000); // 5秒後隱藏成功訊息
+                    } else {
+                        // 處理 PHP 腳本內部回報的錯誤
+                        throw new Error(data.message || '發生未知的錯誤。');
+                    }
+                })
+                .catch(error => {
+                    // 捕獲網路錯誤或從 then 區塊拋出的錯誤
+                    errorMessage.textContent = error.message;
+                    errorMessage.classList.remove('hidden');
+                     setTimeout(() => {
+                        errorMessage.classList.add('hidden');
+                    }, 5000); // 5秒後隱藏錯誤訊息
+                })
+                .finally(() => {
+                    // 無論成功或失敗，都恢復按鈕的狀態
+                    submitButton.innerHTML = originalButtonText;
+                    submitButton.disabled = false;
                 });
             });
         });
     </script>
+
 </body>
 </html>
-
