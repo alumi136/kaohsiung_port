@@ -1,11 +1,10 @@
 <?php
 // ☆☆☆☆ 這是一個 CLI (命令列介面) 腳本 ☆☆☆☆
-// 任務：從 Google Drive 下載三種格式的 Excel 檔案，分析後寫入 daily_outbound 資料表。
+// 任務：從 Google Drive 下載多種格式的 Excel 檔案，分析後寫入 daily_outbound 資料表。
 
 set_time_limit(3600); // 增加腳本最大執行時間至 1 小時
 ini_set('memory_limit', '512M');
 
-// 【*** 重大變更：引入 Spout 和原生 Autoloader ***】
 require __DIR__ . '/vendor/autoload.php';
 
 use Google\Client as Google_Client;
@@ -36,7 +35,6 @@ function write_log($message) {
     echo $formatted_message;
 }
 
-// Spout 讀取日期物件，需要特別處理
 function parse_spout_date_value($value) {
     if (empty($value)) return null;
     if ($value instanceof \DateTime) {
@@ -110,7 +108,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Original files cron job started (v28 - Spout Extension Fix). ====");
+write_log("==== Original files cron job started (v29 - Handover List Logic). ====");
 
 try {
     $driveService = getGoogleDriveClient();
@@ -128,7 +126,6 @@ try {
             $response = $driveService->files->get($file_id, ['alt' => 'media']);
             $file_content = $response->getBody()->getContents();
 
-            // 【*** 邏輯修正：建立帶有正確副檔名的臨時檔案 ***】
             $file_extension = pathinfo($file_name, PATHINFO_EXTENSION);
             $file_tmp_path = sys_get_temp_dir() . '/' . uniqid('drive_import_', true) . '.' . $file_extension;
             file_put_contents($file_tmp_path, $file_content);
@@ -141,7 +138,6 @@ try {
 
             $transaction_started = false;
             try {
-                // Spout 現在可以透過副檔名正確識別檔案類型
                 $reader = ReaderEntityFactory::createReaderFromFile($file_tmp_path);
                 $reader->open($file_tmp_path);
                 
@@ -153,19 +149,26 @@ try {
                     foreach ($sheet->getRowIterator() as $rowIndex => $row) {
                         $headerRow = $row->toArray();
                         $headerString = implode(',', array_map('trim', $headerRow));
-                        break; // 只讀第一行
+                        break;
                     }
-                    break; // 只讀第一個 sheet
+                    break;
                 }
                 
-                if (strpos($headerString, '放行時間') !== false) $file_type = 'RELEASED_NOT_OUT';
-                elseif (strpos($headerString, '進倉時間') !== false) $file_type = 'INSTOCK_NOT_OUT';
-                elseif (strpos($headerString, '有無艙單') !== false) $file_type = 'DECLARED_NOT_IN';
+                // 【*** 新增邏輯：增加對「進口出倉交接清表」的判斷 ***】
+                if (strpos($headerString, '出倉時間') !== false && strpos($headerString, '申報重量') !== false) {
+                    $file_type = 'HANDOVER_LIST';
+                } elseif (strpos($headerString, '放行時間') !== false) {
+                    $file_type = 'RELEASED_NOT_OUT';
+                } elseif (strpos($headerString, '進倉時間') !== false) {
+                    $file_type = 'INSTOCK_NOT_OUT';
+                } elseif (strpos($headerString, '有無艙單') !== false) {
+                    $file_type = 'DECLARED_NOT_IN';
+                }
 
                 if (!$file_type) throw new Exception("無法從第一行的欄位標頭識別檔案類型。 Header: " . $headerString);
                 
                 write_log("檔案類型識別為: {$file_type}");
-                $reader->close(); // 關閉讀取器，準備重新開始串流
+                $reader->close();
 
                 $conn->begin_transaction();
                 $transaction_started = true;
@@ -177,12 +180,17 @@ try {
                 
                 foreach ($reader->getSheetIterator() as $sheet) {
                     foreach ($sheet->getRowIterator() as $rowIndex => $row) {
-                        if ($rowIndex === 1) continue; // 跳過標頭行
+                        if ($rowIndex === 1) continue;
                         
                         $rowDataArray = $row->toArray();
                         
-                        $house_no_cell = trim($rowDataArray[2] ?? ''); // C欄
-                        if (empty($house_no_cell)) continue;
+                        $key_identifier_cell = '';
+                        if($file_type === 'HANDOVER_LIST'){
+                            $key_identifier_cell = trim($rowDataArray[4] ?? ''); // 交接清單用 E 欄 (分號)
+                        } else {
+                            $key_identifier_cell = trim($rowDataArray[2] ?? ''); // 其他清單用 C 欄 (分號)
+                        }
+                        if (empty($key_identifier_cell)) continue;
                         
                         $row_data = [
                             'declaration_no' => null, 'master_no' => null, 'house_no' => null, 'weight' => null, 
@@ -194,9 +202,22 @@ try {
                         ];
 
                         switch ($file_type) {
+                            case 'HANDOVER_LIST': // 【*** 新增檔案類型的處理邏輯 ***】
+                                $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[0] ?? null); // A
+                                $row_data['declaration_no'] = $rowDataArray[1] ?? null; // B
+                                $row_data['declaration_type'] = $rowDataArray[2] ?? null; // C
+                                $row_data['master_no'] = $rowDataArray[3] ?? null; // D
+                                $row_data['house_no'] = $key_identifier_cell; // E
+                                $row_data['total_packages'] = (int)($rowDataArray[7] ?? 0); // H
+                                $row_data['packages_in'] = (int)($rowDataArray[8] ?? 0); // I
+                                $row_data['packages_out'] = (int)($rowDataArray[9] ?? 0); // J
+                                $row_data['weight'] = (float)($rowDataArray[10] ?? 0); // K (申報重量)
+                                $row_data['remark'] = $rowDataArray[12] ?? null; // M
+                                break;
+                            
                             case 'DECLARED_NOT_IN':
                                 $row_data['master_no'] = $rowDataArray[1]; // B
-                                $row_data['house_no'] = $house_no_cell; // C
+                                $row_data['house_no'] = $key_identifier_cell; // C
                                 $row_data['declaration_no'] = $rowDataArray[4]; // E
                                 $row_data['declaration_type'] = $rowDataArray[5]; // F
                                 $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0); // G
@@ -208,7 +229,7 @@ try {
                                 break;
                             case 'INSTOCK_NOT_OUT':
                                 $row_data['master_no'] = $rowDataArray[1]; // B
-                                $row_data['house_no'] = $house_no_cell; // C
+                                $row_data['house_no'] = $key_identifier_cell; // C
                                 $raw_declaration = $rowDataArray[4] ?? ''; // E
                                 $row_data['declaration_no'] = substr($raw_declaration, 0, 14);
                                 $row_data['declaration_type'] = $rowDataArray[5]; // F
@@ -219,7 +240,7 @@ try {
                                 break;
                             case 'RELEASED_NOT_OUT':
                                 $row_data['master_no'] = $rowDataArray[1]; // B
-                                $row_data['house_no'] = $house_no_cell; // C
+                                $row_data['house_no'] = $key_identifier_cell; // C
                                 $row_data['declaration_no'] = $rowDataArray[3]; // D
                                 $row_data['declaration_type'] = $rowDataArray[4]; // E
                                 $row_data['total_packages'] = (int)($rowDataArray[7] ?? 0); // H
@@ -274,5 +295,4 @@ try {
 
 write_log("==== Original files cron job finished. ====\n");
 ?>
-
 
