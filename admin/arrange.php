@@ -175,7 +175,6 @@ if (empty($_GET) || (!isset($_GET['search']) && !isset($_GET['page']))) {
 }
 $keyword = $_GET['keyword'] ?? '';
 $advanced_display = isset($_GET['advanced_display']);
-// 【新】獲取「只顯示未通關」狀態
 $show_unclear_only = isset($_GET['show_unclear_only']);
 
 if (!empty($start_date)) {
@@ -191,7 +190,6 @@ if (!empty($keyword)) {
     $keyword_param = "%{$keyword}%";
     array_push($params, $keyword_param, $keyword_param, $keyword_param);
 }
-// 【新】如果勾選，則加入 status = 0 的條件
 if ($show_unclear_only) {
     $where_clauses[] = "status = 0";
 }
@@ -202,7 +200,8 @@ $total_stmt->execute($params);
 $total_records = $total_stmt->fetchColumn();
 $total_pages = ceil($total_records / $records_per_page);
 
-$data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY id DESC LIMIT $records_per_page OFFSET $offset";
+// 【更新】調整排序：依照到港日期升冪排序 (最早的優先)，若日期相同則最新的在前面
+$data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY arrival_date ASC, id DESC LIMIT $records_per_page OFFSET $offset";
 $data_stmt = $pdo->prepare($data_sql);
 $data_stmt->execute($params);
 $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -252,7 +251,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                 <input type="checkbox" name="advanced_display" id="advanced_display" value="1" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" <?php if ($advanced_display) echo 'checked'; ?>>
                 <label for="advanced_display" class="ml-2 block text-sm text-gray-900">進階顯示</label>
             </div>
-            <!-- 【新】新增「只顯示未通關」核取方塊 -->
             <div class="flex items-center pb-2 self-center mt-4">
                 <input type="checkbox" name="show_unclear_only" id="show_unclear_only" value="1" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" <?php if ($show_unclear_only) echo 'checked'; ?>>
                 <label for="show_unclear_only" class="ml-2 block text-sm text-gray-900">只顯示未通關</label>
@@ -343,7 +341,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     if ($advanced_display) {
                         $base_query_params['advanced_display'] = 1;
                     }
-                    // 【新】確保分頁連結會帶上「只顯示未通關」的參數
                     if ($show_unclear_only) {
                         $base_query_params['show_unclear_only'] = 1;
                     }
