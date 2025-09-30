@@ -9,8 +9,6 @@ require_once 'config.php';
 // 使用 PhpSpreadsheet 相關類別
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Shared\Date;
-use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 // 檢查使用者是否登入，否則導向到登入頁面
 if (!isset($_SESSION['user_id'])) {
@@ -52,18 +50,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 if (count(array_filter($rowData)) == 0) continue;
 
-                // 【*** 邏輯修正：更新為正確的 Excel 欄位對應 ***】
-                $arrival_date = !empty($rowData[0]) ? Date::excelToDateTimeObject($rowData[0])->format('Y-m-d') : null; // A欄
-                $bl_number = $rowData[1] ?? null;        // B欄
-                $container_number = $rowData[2] ?? null; // C欄
-                $vessel_code = $rowData[4] ?? null;      // E欄
-                $vessel_name = $rowData[5] ?? null;      // F欄
-                $quantity = $rowData[7] ?? null;         // H欄
-                $weight = $rowData[8] ?? 0;              // I欄
-                $warehouse = $rowData[9] ?? null;        // J欄
-                $remarks = $rowData[10] ?? null;         // K欄
+                $arrival_date = !empty($rowData[0]) ? Date::excelToDateTimeObject($rowData[0])->format('Y-m-d') : null;
+                $bl_number = $rowData[1] ?? null;
+                $container_number = $rowData[2] ?? null;
+                $quantity = $rowData[7] ?? null;
+                $warehouse = $rowData[9] ?? null;
                 
-                // 必填欄位驗證 (使用修正後的變數)
                 $validation_error = '';
                 if (empty($arrival_date)) $validation_error = '到港日為空';
                 elseif (empty($bl_number)) $validation_error = '主單號(提單)為空';
@@ -84,7 +76,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     continue;
                 }
                 
-                $status = 0; // 預設為未通關
+                $vessel_code = $rowData[4] ?? null;
+                $vessel_name = $rowData[5] ?? null;
+                $weight = $rowData[8] ?? 0;
+                $remarks = $rowData[10] ?? null;
+                $status = 0;
 
                 $insert_stmt->execute([$arrival_date, $bl_number, $container_number, $vessel_code, $vessel_name, $quantity, $weight, $warehouse, $remarks, $status]);
                 $imported_count++;
@@ -179,6 +175,8 @@ if (empty($_GET) || (!isset($_GET['search']) && !isset($_GET['page']))) {
 }
 $keyword = $_GET['keyword'] ?? '';
 $advanced_display = isset($_GET['advanced_display']);
+// 【新】獲取「只顯示未通關」狀態
+$show_unclear_only = isset($_GET['show_unclear_only']);
 
 if (!empty($start_date)) {
     $where_clauses[] = "arrival_date >= ?";
@@ -193,6 +191,10 @@ if (!empty($keyword)) {
     $keyword_param = "%{$keyword}%";
     array_push($params, $keyword_param, $keyword_param, $keyword_param);
 }
+// 【新】如果勾選，則加入 status = 0 的條件
+if ($show_unclear_only) {
+    $where_clauses[] = "status = 0";
+}
 
 $where_sql = count($where_clauses) > 0 ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
 $total_stmt = $pdo->prepare("SELECT COUNT(*) FROM daily_arrange $where_sql");
@@ -200,7 +202,7 @@ $total_stmt->execute($params);
 $total_records = $total_stmt->fetchColumn();
 $total_pages = ceil($total_records / $records_per_page);
 
-$data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY arrival_date ASC, id DESC LIMIT $records_per_page OFFSET $offset";
+$data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY id DESC LIMIT $records_per_page OFFSET $offset";
 $data_stmt = $pdo->prepare($data_sql);
 $data_stmt->execute($params);
 $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -233,7 +235,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     <?php if ($warning): ?><div class="mb-4 p-4 bg-yellow-100 text-yellow-700 rounded-lg"><?php echo $warning; ?></div><?php endif; ?>
 
     <div class="mb-6 p-4 bg-gray-50 rounded-lg">
-        <form action="arrange.php" method="GET" class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+        <form action="arrange.php" method="GET" class="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
             <div>
                 <label for="start_date" class="block text-sm font-medium text-gray-700 mb-1">起始日期</label>
                 <input type="date" name="start_date" id="start_date" class="form-input" value="<?php echo htmlspecialchars($start_date); ?>">
@@ -249,6 +251,11 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
             <div class="flex items-center pb-2 self-center mt-4">
                 <input type="checkbox" name="advanced_display" id="advanced_display" value="1" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" <?php if ($advanced_display) echo 'checked'; ?>>
                 <label for="advanced_display" class="ml-2 block text-sm text-gray-900">進階顯示</label>
+            </div>
+            <!-- 【新】新增「只顯示未通關」核取方塊 -->
+            <div class="flex items-center pb-2 self-center mt-4">
+                <input type="checkbox" name="show_unclear_only" id="show_unclear_only" value="1" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" <?php if ($show_unclear_only) echo 'checked'; ?>>
+                <label for="show_unclear_only" class="ml-2 block text-sm text-gray-900">只顯示未通關</label>
             </div>
             <div class="flex space-x-2">
                 <button type="submit" name="search" value="1" class="btn-primary flex-grow">查詢</button>
@@ -292,7 +299,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php if ($advanced_display): ?>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-blue-600 font-semibold"><?php echo htmlspecialchars($row['inandout']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm">
-                        <?php if ($row['innoout'] > 0): ?>
+                        <?php if (($row['innoout'] ?? 0) > 0): ?>
                             <a href="innoout_details.php?bl_number=<?php echo urlencode($row['bl_number']); ?>" target="_blank" class="text-yellow-600 hover:text-yellow-800 underline font-bold">
                                 <?php echo htmlspecialchars($row['innoout']); ?>
                             </a>
@@ -335,6 +342,10 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     ];
                     if ($advanced_display) {
                         $base_query_params['advanced_display'] = 1;
+                    }
+                    // 【新】確保分頁連結會帶上「只顯示未通關」的參數
+                    if ($show_unclear_only) {
+                        $base_query_params['show_unclear_only'] = 1;
                     }
                 ?>
                 <a href="?<?php echo http_build_query(array_merge($base_query_params, ['page' => 1])); ?>" class="px-3 py-1 border rounded-md text-sm hover:bg-gray-200">首頁</a>
