@@ -1,5 +1,7 @@
 <?php
 session_start();
+// 引用資料庫設定檔以進行查詢
+require_once 'config.php';
 
 // 檢查使用者是否登入，否則導向到登入頁面
 if (!isset($_SESSION['user_id'])) {
@@ -12,6 +14,55 @@ if (isset($_GET['logout'])) {
     session_destroy();
     header("Location: login.php");
     exit();
+}
+
+// --- 跑馬燈資料計算 ---
+$marquee_text = '';
+try {
+    // 【*** 邏輯修正：移除 WHERE status = 0 條件 ***】
+    // 計算「已進未出」的累計總和
+    $stmt_innoout = $pdo->query("
+        SELECT
+            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 5 DAY THEN innoout ELSE 0 END) AS total_5,
+            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 7 DAY THEN innoout ELSE 0 END) AS total_7,
+            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 14 DAY THEN innoout ELSE 0 END) AS total_14
+        FROM daily_arrange
+    ");
+    $innoout_totals = $stmt_innoout->fetch(PDO::FETCH_ASSOC);
+
+    // 【*** 邏輯修正：移除 WHERE status = 0 條件 ***】
+    // 計算「已申報未進倉」的累計總和
+    $stmt_noin = $pdo->query("
+        SELECT
+            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 5 DAY THEN noin ELSE 0 END) AS total_5,
+            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 7 DAY THEN noin ELSE 0 END) AS total_7,
+            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 14 DAY THEN noin ELSE 0 END) AS total_14
+        FROM daily_arrange
+    ");
+    $noin_totals = $stmt_noin->fetch(PDO::FETCH_ASSOC);
+
+    // 組合跑馬燈文字
+    $innoout_text = sprintf(
+        "已進未出件數: 5日前共 %d 件, 7日前共 %d 件, 14日前共 %d 件",
+        $innoout_totals['total_5'] ?? 0,
+        $innoout_totals['total_7'] ?? 0,
+        $innoout_totals['total_14'] ?? 0
+    );
+
+    $noin_text = sprintf(
+        "已申報未進倉件數: 5日前共 %d 件, 7日前共 %d 件, 14日前共 %d 件",
+        $noin_totals['total_5'] ?? 0,
+        $noin_totals['total_7'] ?? 0,
+        $noin_totals['total_14'] ?? 0
+    );
+
+    $marquee_text = $innoout_text . '； ' . $noin_text;
+
+} catch (PDOException $e) {
+    // 如果資料庫查詢失敗，顯示預設訊息
+    $marquee_text = "歡迎使用本系統，警示資訊載入失敗。";
+    // 可以選擇性地將錯誤記錄到日誌中
+    // error_log("Marquee data query failed: " . $e->getMessage());
 }
 ?>
 <!DOCTYPE html>
@@ -83,8 +134,13 @@ if (isset($_GET['logout'])) {
         <!-- Main Content -->
         <div class="flex-1 flex flex-col">
             <header class="h-16 bg-white shadow-md flex items-center justify-between px-6">
-                <div class="text-gray-600">歡迎使用本系統</div>
-                <div class="flex items-center">
+                <!-- 【*** 新增跑馬燈功能 ***】 -->
+                <div class="flex-1 text-red-600 font-semibold overflow-hidden">
+                    <marquee behavior="scroll" direction="left" scrollamount="6">
+                        <?php echo htmlspecialchars($marquee_text); ?>
+                    </marquee>
+                </div>
+                <div class="flex items-center pl-4">
                     <span class="text-gray-700 mr-4">
                         你好, <?php echo htmlspecialchars($_SESSION['user_full_name']); ?>
                     </span>
