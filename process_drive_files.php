@@ -1,13 +1,12 @@
 <?php
 // ☆☆☆☆ 這是一個 CLI (命令列介面) 腳本 ☆☆☆☆
-// 說明: 智慧判斷 Excel 格式，使用 spout (處理 .xlsx) 或 PhpSpreadsheet (處理 .xls) 來高效處理檔案。
+// 說明: 智慧判斷 Excel 格式，使用 spout (處理 .xlsx) 或 優化後的 PhpSpreadsheet (處理 .xls) 來高效處理檔案。
 
 set_time_limit(3600);
 ini_set('memory_limit', '512M');
 
 require __DIR__ . '/vendor/autoload.php';
 
-// 【*** 核心變更：同時引入兩個函式庫 ***】
 use Google\Client as Google_Client;
 use Google\Service\Drive as Google_Service_Drive;
 use Box\Spout\Reader\Common\Creator\ReaderEntityFactory;
@@ -27,8 +26,7 @@ $db_config = [
 const TARGET_TABLE = 'daily_outbound';
 const LOG_FILE = __DIR__ . '/daily_outbound.log';
 
-// 【*** 邏輯修正：將 XlsChunkReadFilter 的定義移至檔案頂部 ***】
-// 為了降低記憶體，我們一樣採用分塊讀取
+// 【*** 核心邏輯：實作 IReadFilter 介面，用於分塊讀取 ***】
 class XlsChunkReadFilter implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter {
     private $startRow = 0; private $endRow = 0;
     public function setRows($startRow, $chunkSize) { $this->startRow = $startRow; $this->endRow = $startRow + $chunkSize; }
@@ -47,8 +45,8 @@ function write_log($message) {
 
 function parse_date_value($value) {
     if (empty($value)) return null;
-    if (is_numeric($value)) return Date::excelToDateTimeObject($value)->format('Y-m-d H:i:s');
     if ($value instanceof \DateTime) return $value->format('Y-m-d H:i:s');
+    if (is_numeric($value)) return Date::excelToDateTimeObject($value)->format('Y-m-d H:i:s');
     if (is_string($value)) {
         try {
             $dt = new DateTime($value);
@@ -86,7 +84,6 @@ function batch_insert(mysqli $conn, array $data): int {
     return $affected_rows;
 }
 
-// ... Google Drive 相關函式 (無變更) ...
 function getGoogleDriveClient(): Google_Service_Drive {
     $client = new Google_Client();
     $client->setApplicationName('Kaohsiung Port Drive Importer');
@@ -118,7 +115,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Cron job started (v3.2 - XLS Chunk Optimization). ====");
+write_log("==== Cron job started (v5.0 - Optimized XLS Chunking). ====");
 
 try {
     $driveService = getGoogleDriveClient();
@@ -155,7 +152,7 @@ try {
                     write_log("偵測到 XLSX 格式，使用 Spout 串流模式處理...");
                     $total_inserted_rows = processWithSpout($conn, $file_tmp_path);
                 } else {
-                    write_log("偵測到 XLS 或其他格式，使用 PhpSpreadsheet 相容模式處理...");
+                    write_log("偵測到 XLS 格式，使用 [優化版 PhpSpreadsheet] 模式處理...");
                     $total_inserted_rows = processWithPhpSpreadsheet($conn, $file_tmp_path);
                 }
 
@@ -182,7 +179,7 @@ try {
 write_log("==== Cron job finished. ====\n");
 
 
-// 【*** Spout 處理器 (無變更) ***】
+// 【*** Spout 處理器 (for .xlsx) ***】
 function processWithSpout($conn, $filePath) {
     $reader = ReaderEntityFactory::createReaderFromFile($filePath);
     $reader->open($filePath);
@@ -234,22 +231,23 @@ function processWithSpout($conn, $filePath) {
     return $total_rows;
 }
 
-// 【*** PhpSpreadsheet 處理器 (已優化) ***】
+// 【*** 全新優化邏輯：使用 PhpSpreadsheet 處理 XLS 檔案 ***】
 function processWithPhpSpreadsheet($conn, $filePath) {
     $reader = IOFactory::createReaderForFile($filePath);
     $reader->setReadDataOnly(true);
     
     $total_rows = 0;
-    $chunk_size = 2000; // 【優化】將批次大小提升至 2000
+    $chunk_size = 2000; // 每次讀取 2000 行
     $chunkFilter = new XlsChunkReadFilter();
     $reader->setReadFilter($chunkFilter);
 
+    // 先獲取總行數
     $worksheetInfo = $reader->listWorksheetInfo($filePath);
     $highestRow = $worksheetInfo[0]['totalRows'];
     write_log("PhpSpreadsheet: 偵測到總行數: {$highestRow}");
 
+    // 分塊循環
     for ($startRow = 2; $startRow <= $highestRow; $startRow += $chunk_size) {
-        // 【優化】增加詳細日誌
         write_log("PhpSpreadsheet: 準備讀取第 {$startRow} 行至 " . ($startRow + $chunk_size - 1) . " 行...");
         $chunkFilter->setRows($startRow, $chunk_size);
         $spreadsheet = $reader->load($filePath);
@@ -257,8 +255,12 @@ function processWithPhpSpreadsheet($conn, $filePath) {
         write_log("PhpSpreadsheet: 區塊已載入記憶體。");
         
         $data_to_insert_chunk = [];
-        // 【優化】改用 rangeToArray 一次性讀取區塊資料
-        $chunkData = $worksheet->rangeToArray('A' . $startRow . ':' . $worksheet->getHighestColumn() . ($startRow + $chunk_size - 1), null, true, true, true);
+        
+        // 【優化】改用 rangeToArray 一次性將區塊資料讀入陣列
+        $chunkData = $worksheet->rangeToArray(
+            'A' . $startRow . ':' . $worksheet->getHighestColumn() . ($startRow + $chunk_size - 1), 
+            null, true, true, true
+        );
 
         foreach ($chunkData as $rowIndex => $rowDataArray) {
             $house_no_cell = trim($rowDataArray['C'] ?? '');
@@ -286,6 +288,7 @@ function processWithPhpSpreadsheet($conn, $filePath) {
             write_log("PhpSpreadsheet: 已寫入 {$inserted} 筆資料 (累計: {$total_rows})...");
         }
         
+        // 【優化】積極釋放記憶體
         $spreadsheet->disconnectWorksheets();
         unset($spreadsheet);
         write_log("PhpSpreadsheet: 區塊記憶體已釋放。");
