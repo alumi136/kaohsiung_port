@@ -27,6 +27,15 @@ $db_config = [
 const TARGET_TABLE = 'daily_outbound';
 const LOG_FILE = __DIR__ . '/daily_outbound.log';
 
+// 【*** 邏輯修正：將 XlsChunkReadFilter 的定義移至檔案頂部 ***】
+// 為了降低記憶體，我們一樣採用分塊讀取
+class XlsChunkReadFilter implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter {
+    private $startRow = 0; private $endRow = 0;
+    public function setRows($startRow, $chunkSize) { $this->startRow = $startRow; $this->endRow = $startRow + $chunkSize; }
+    public function readCell($columnAddress, $row, $worksheetName = '') { return ($row >= $this->startRow && $row < $this->endRow); }
+}
+
+
 // --- 輔助函式庫 ---
 function write_log($message) {
     $memory = round(memory_get_usage(true) / 1024 / 1024, 2) . " MB";
@@ -109,7 +118,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Cron job started (v3.0 - Hybrid Reader). ====");
+write_log("==== Cron job started (v3.1 - Hybrid Reader Fix). ====");
 
 try {
     $driveService = getGoogleDriveClient();
@@ -142,7 +151,6 @@ try {
                 $conn->begin_transaction();
                 $transaction_started = true;
                 
-                // 【*** 全新邏輯：根據副檔名選擇不同的處理器 ***】
                 if ($file_extension === 'xlsx') {
                     write_log("偵測到 XLSX 格式，使用 Spout 串流模式處理...");
                     $total_inserted_rows = processWithSpout($conn, $file_tmp_path);
@@ -227,13 +235,6 @@ function processWithSpout($conn, $filePath) {
 }
 
 // 【*** 全新函式：使用 PhpSpreadsheet 處理 XLS 檔案 ***】
-// 為了降低記憶體，我們一樣採用分塊讀取
-class XlsChunkReadFilter implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter {
-    private $startRow = 0; private $endRow = 0;
-    public function setRows($startRow, $chunkSize) { $this->startRow = $startRow; $this->endRow = $startRow + $chunkSize; }
-    public function readCell($columnAddress, $row, $worksheetName = '') { return ($row >= $this->startRow && $row < $this->endRow); }
-}
-
 function processWithPhpSpreadsheet($conn, $filePath) {
     $reader = IOFactory::createReaderForFile($filePath);
     $reader->setReadDataOnly(true);
