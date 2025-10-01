@@ -118,7 +118,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Cron job started (v3.1 - Hybrid Reader Fix). ====");
+write_log("==== Cron job started (v3.2 - XLS Chunk Optimization). ====");
 
 try {
     $driveService = getGoogleDriveClient();
@@ -182,7 +182,7 @@ try {
 write_log("==== Cron job finished. ====\n");
 
 
-// 【*** 全新函式：使用 Spout 處理 XLSX 檔案 ***】
+// 【*** Spout 處理器 (無變更) ***】
 function processWithSpout($conn, $filePath) {
     $reader = ReaderEntityFactory::createReaderFromFile($filePath);
     $reader->open($filePath);
@@ -234,31 +234,33 @@ function processWithSpout($conn, $filePath) {
     return $total_rows;
 }
 
-// 【*** 全新函式：使用 PhpSpreadsheet 處理 XLS 檔案 ***】
+// 【*** PhpSpreadsheet 處理器 (已優化) ***】
 function processWithPhpSpreadsheet($conn, $filePath) {
     $reader = IOFactory::createReaderForFile($filePath);
     $reader->setReadDataOnly(true);
     
     $total_rows = 0;
-    $chunk_size = 1000; // XLS 格式較耗資源，批次縮小一點
+    $chunk_size = 2000; // 【優化】將批次大小提升至 2000
     $chunkFilter = new XlsChunkReadFilter();
     $reader->setReadFilter($chunkFilter);
 
     $worksheetInfo = $reader->listWorksheetInfo($filePath);
     $highestRow = $worksheetInfo[0]['totalRows'];
+    write_log("PhpSpreadsheet: 偵測到總行數: {$highestRow}");
 
     for ($startRow = 2; $startRow <= $highestRow; $startRow += $chunk_size) {
+        // 【優化】增加詳細日誌
+        write_log("PhpSpreadsheet: 準備讀取第 {$startRow} 行至 " . ($startRow + $chunk_size - 1) . " 行...");
         $chunkFilter->setRows($startRow, $chunk_size);
         $spreadsheet = $reader->load($filePath);
         $worksheet = $spreadsheet->getActiveSheet();
+        write_log("PhpSpreadsheet: 區塊已載入記憶體。");
         
         $data_to_insert_chunk = [];
-        foreach ($worksheet->getRowIterator($startRow) as $row) {
-            $rowIndex = $row->getRowIndex();
-            if ($rowIndex >= $startRow + $chunk_size) break;
-            
-            $rowDataArray = $worksheet->rangeToArray('A' . $rowIndex . ':' . $worksheet->getHighestColumn() . $rowIndex, null, true, false, true)[$rowIndex];
-            
+        // 【優化】改用 rangeToArray 一次性讀取區塊資料
+        $chunkData = $worksheet->rangeToArray('A' . $startRow . ':' . $worksheet->getHighestColumn() . ($startRow + $chunk_size - 1), null, true, true, true);
+
+        foreach ($chunkData as $rowIndex => $rowDataArray) {
             $house_no_cell = trim($rowDataArray['C'] ?? '');
             if (empty($house_no_cell)) continue;
 
@@ -286,6 +288,7 @@ function processWithPhpSpreadsheet($conn, $filePath) {
         
         $spreadsheet->disconnectWorksheets();
         unset($spreadsheet);
+        write_log("PhpSpreadsheet: 區塊記憶體已釋放。");
     }
     return $total_rows;
 }
