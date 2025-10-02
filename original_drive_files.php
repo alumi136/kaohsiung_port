@@ -108,7 +108,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Original files cron job started (v29 - Handover List Logic). ====");
+write_log("==== Original files cron job started (v30 - Package Count Check). ====");
 
 try {
     $driveService = getGoogleDriveClient();
@@ -144,7 +144,6 @@ try {
                 $file_type = null;
                 $headerString = '';
 
-                // 1. 讀取第一行以判斷檔案類型
                 foreach ($reader->getSheetIterator() as $sheet) {
                     foreach ($sheet->getRowIterator() as $rowIndex => $row) {
                         $headerRow = $row->toArray();
@@ -154,7 +153,6 @@ try {
                     break;
                 }
                 
-                // 【*** 新增邏輯：增加對「進口出倉交接清表」的判斷 ***】
                 if (strpos($headerString, '出倉時間') !== false && strpos($headerString, '申報重量') !== false) {
                     $file_type = 'HANDOVER_LIST';
                 } elseif (strpos($headerString, '放行時間') !== false) {
@@ -173,7 +171,6 @@ try {
                 $conn->begin_transaction();
                 $transaction_started = true;
                 
-                // 2. 重新開啟讀取器，開始逐行串流處理
                 $reader->open($file_tmp_path);
                 $data_to_insert_chunk = [];
                 $chunk_size = 2000;
@@ -186,9 +183,9 @@ try {
                         
                         $key_identifier_cell = '';
                         if($file_type === 'HANDOVER_LIST'){
-                            $key_identifier_cell = trim($rowDataArray[4] ?? ''); // 交接清單用 E 欄 (分號)
+                            $key_identifier_cell = trim($rowDataArray[4] ?? ''); // E
                         } else {
-                            $key_identifier_cell = trim($rowDataArray[2] ?? ''); // 其他清單用 C 欄 (分號)
+                            $key_identifier_cell = trim($rowDataArray[2] ?? ''); // C
                         }
                         if (empty($key_identifier_cell)) continue;
                         
@@ -201,74 +198,90 @@ try {
                             'remark' => null, 'status0' => 0
                         ];
 
+                        // 【*** 核心邏輯修正：在此處進行件數判斷 ***】
+                        $is_packages_consistent = false;
+                        $temp_total = 0; $temp_in = 0; $temp_out = 0;
+
                         switch ($file_type) {
-                            case 'HANDOVER_LIST': // 【*** 新增檔案類型的處理邏輯 ***】
-                                $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[0] ?? null); // A
-                                $row_data['declaration_no'] = $rowDataArray[1] ?? null; // B
-                                $row_data['declaration_type'] = $rowDataArray[2] ?? null; // C
-                                $row_data['master_no'] = $rowDataArray[3] ?? null; // D
-                                $row_data['house_no'] = $key_identifier_cell; // E
-                                $row_data['total_packages'] = (int)($rowDataArray[7] ?? 0); // H
-                                $row_data['packages_in'] = (int)($rowDataArray[8] ?? 0); // I
-                                $row_data['packages_out'] = (int)($rowDataArray[9] ?? 0); // J
-                                $row_data['weight'] = (float)($rowDataArray[10] ?? 0); // K (申報重量)
-                                $row_data['remark'] = $rowDataArray[12] ?? null; // M
+                            case 'HANDOVER_LIST':
+                                $row_data['master_no'] = $rowDataArray[3] ?? null;
+                                $row_data['house_no'] = $key_identifier_cell;
+                                $row_data['declaration_no'] = $rowDataArray[1] ?? null;
+                                $row_data['declaration_type'] = $rowDataArray[2] ?? null;
+                                $temp_total = (int)($rowDataArray[7] ?? 0);
+                                $temp_in = (int)($rowDataArray[8] ?? 0);
+                                $temp_out = (int)($rowDataArray[9] ?? 0);
+                                $row_data['total_packages'] = $temp_total;
+                                $row_data['packages_in'] = $temp_in;
+                                $row_data['packages_out'] = $temp_out;
+                                $row_data['weight'] = (float)($rowDataArray[10] ?? 0);
+                                $row_data['remark'] = $rowDataArray[12] ?? null;
+                                
+                                if ($temp_total === $temp_in && $temp_in === $temp_out) {
+                                    $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[0] ?? null);
+                                }
                                 break;
                             
                             case 'DECLARED_NOT_IN':
-                                $row_data['master_no'] = $rowDataArray[1]; // B
-                                $row_data['house_no'] = $key_identifier_cell; // C
-                                $row_data['declaration_no'] = $rowDataArray[4]; // E
-                                $row_data['declaration_type'] = $rowDataArray[5]; // F
-                                $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0); // G
-                                $row_data['packages_in'] = (int)($rowDataArray[7] ?? 0); // H
-                                $row_data['packages_out'] = (int)($rowDataArray[8] ?? 0); // I
-                                $remark_value = trim($rowDataArray[12] ?? ''); // M
+                                $row_data['master_no'] = $rowDataArray[1];
+                                $row_data['house_no'] = $key_identifier_cell;
+                                $row_data['declaration_no'] = $rowDataArray[4];
+                                $row_data['declaration_type'] = $rowDataArray[5];
+                                $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0);
+                                $row_data['packages_in'] = (int)($rowDataArray[7] ?? 0);
+                                $row_data['packages_out'] = (int)($rowDataArray[8] ?? 0);
+                                $remark_value = trim($rowDataArray[12] ?? '');
                                 $row_data['remark'] = $remark_value;
                                 if (strpos($remark_value, 'SZ') !== false) $row_data['status0'] = 5;
                                 break;
+
                             case 'INSTOCK_NOT_OUT':
-                                $row_data['master_no'] = $rowDataArray[1]; // B
-                                $row_data['house_no'] = $key_identifier_cell; // C
-                                $raw_declaration = $rowDataArray[4] ?? ''; // E
+                                $row_data['master_no'] = $rowDataArray[1];
+                                $row_data['house_no'] = $key_identifier_cell;
+                                $raw_declaration = $rowDataArray[4] ?? '';
                                 $row_data['declaration_no'] = substr($raw_declaration, 0, 14);
-                                $row_data['declaration_type'] = $rowDataArray[5]; // F
-                                $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0); // G
-                                $row_data['packages_in'] = (int)($rowDataArray[7] ?? 0); // H
-                                $row_data['packages_out'] = (int)($rowDataArray[8] ?? 0); // I
-                                $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[9] ?? null); // J
+                                $row_data['declaration_type'] = $rowDataArray[5];
+                                $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0);
+                                $row_data['packages_in'] = (int)($rowDataArray[7] ?? 0);
+                                $row_data['packages_out'] = (int)($rowDataArray[8] ?? 0);
+                                $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[9] ?? null);
                                 break;
+
                             case 'RELEASED_NOT_OUT':
-                                $row_data['master_no'] = $rowDataArray[1]; // B
-                                $row_data['house_no'] = $key_identifier_cell; // C
-                                $row_data['declaration_no'] = $rowDataArray[3]; // D
-                                $row_data['declaration_type'] = $rowDataArray[4]; // E
-                                $row_data['total_packages'] = (int)($rowDataArray[7] ?? 0); // H
-                                $row_data['packages_in'] = (int)($rowDataArray[8] ?? 0); // I
-                                $row_data['packages_out'] = (int)($rowDataArray[9] ?? 0); // J
-                                $row_data['release_datetime'] = parse_spout_date_value($rowDataArray[10] ?? null); // K
-                                $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[11] ?? null); // L
-                                $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[12] ?? null); // M
-                                $row_data['clearance_method'] = $rowDataArray[13] ?? null; // N
+                                $row_data['master_no'] = $rowDataArray[1];
+                                $row_data['house_no'] = $key_identifier_cell;
+                                $row_data['declaration_no'] = $rowDataArray[3];
+                                $row_data['declaration_type'] = $rowDataArray[4];
+                                $temp_total = (int)($rowDataArray[7] ?? 0);
+                                $temp_in = (int)($rowDataArray[8] ?? 0);
+                                $temp_out = (int)($rowDataArray[9] ?? 0);
+                                $row_data['total_packages'] = $temp_total;
+                                $row_data['packages_in'] = $temp_in;
+                                $row_data['packages_out'] = $temp_out;
+                                $row_data['release_datetime'] = parse_spout_date_value($rowDataArray[10] ?? null);
+                                $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[11] ?? null);
+                                $row_data['clearance_method'] = $rowDataArray[13] ?? null;
+
+                                if ($temp_total === $temp_in && $temp_in === $temp_out) {
+                                    $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[12] ?? null);
+                                }
                                 break;
                         }
                         $data_to_insert_chunk[] = $row_data;
 
                         if (count($data_to_insert_chunk) >= $chunk_size) {
-                            write_log("已讀取 {$chunk_size} 筆資料，準備寫入資料庫...");
                             $inserted_in_chunk = batch_insert($conn, $data_to_insert_chunk);
                             $total_inserted_rows += $inserted_in_chunk;
-                            write_log("寫入成功 (累計: {$total_inserted_rows})。");
+                            write_log("已寫入 " . count($data_to_insert_chunk) . " 筆資料 (累計: {$total_inserted_rows})...");
                             $data_to_insert_chunk = [];
                         }
                     }
                 }
-                // 處理最後不足一個批次的剩餘資料
+                
                 if (!empty($data_to_insert_chunk)) {
-                    write_log("準備寫入最後 " . count($data_to_insert_chunk) . " 筆剩餘資料...");
                     $inserted_in_chunk = batch_insert($conn, $data_to_insert_chunk);
                     $total_inserted_rows += $inserted_in_chunk;
-                    write_log("寫入成功 (累計: {$total_inserted_rows})。");
+                    write_log("準備寫入最後 " . count($data_to_insert_chunk) . " 筆剩餘資料...");
                 }
                 
                 $reader->close();
