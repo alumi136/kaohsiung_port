@@ -65,7 +65,7 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     $end_date = $_GET['end_date'] ?? '';
     $selected_status0 = $_GET['status0_type'] ?? 'ALL';
 
-    $ignore_date_validation = ($selected_status0 === '5');
+    $ignore_date_validation = in_array($selected_status0, ['5', 'DECLARED_NOT_IN']);
     if (!$ignore_date_validation && (empty($start_date) || empty($end_date) || !strtotime($start_date) || !strtotime($end_date) || strtotime($start_date) > strtotime($end_date))) {
         die("無效的匯出請求或日期範圍。");
     }
@@ -86,14 +86,8 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     $params_for_where = [];
     $types_for_where = "";
 
-    // 【*** 核心邏輯修正：智慧型日期欄位選擇 ***】
-    $date_column_to_filter = 'storage_in_datetime';
-    if ($selected_status0 === 'DECLARED_NOT_IN') {
-        $date_column_to_filter = 'created_at';
-    }
-
-    if ($selected_status0 !== '5') {
-        $where_clauses[] = "`{$date_column_to_filter}` BETWEEN ? AND ?";
+    if (!in_array($selected_status0, ['5', 'DECLARED_NOT_IN'])) {
+        $where_clauses[] = "storage_in_datetime BETWEEN ? AND ?";
         $params_for_where[] = $start_date . " 00:00:00";
         $params_for_where[] = $end_date . " 23:59:59";
         $types_for_where .= "ss";
@@ -106,7 +100,8 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     } elseif ($selected_status0 === 'LEAK_MISMATCH_NONZERO_OUT') {
         $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out) AND packages_out != 0";
     } elseif ($selected_status0 === 'DECLARED_NOT_IN') {
-        $where_clauses[] = "master_no IS NOT NULL AND house_no IS NOT NULL AND storage_in_datetime IS NULL";
+        // 【*** 核心邏輯修正 ***】
+        $where_clauses[] = "master_no IS NOT NULL AND house_no IS NOT NULL AND release_datetime IS NULL AND storage_in_datetime IS NULL";
     } elseif ($selected_status0 === 'RELEASED_NOT_OUT') {
         $where_clauses[] = "release_datetime IS NOT NULL AND storage_in_datetime IS NOT NULL AND storage_out_datetime IS NULL";
     } else {
@@ -127,13 +122,19 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
                 declaration_no ASC, master_no ASC, house_no ASC";
     
     $stmt = $conn->prepare($sql);
-    if ($stmt === false) { die("CSV 匯出失敗。"); }
+    if ($stmt === false) {
+        die("CSV 匯出失敗。");
+    }
     
-    if(!empty($params_for_where)){ $stmt->bind_param($types_for_where, ...$params_for_where); }
+    if(!empty($params_for_where)){
+        $stmt->bind_param($types_for_where, ...$params_for_where);
+    }
     
     $stmt->execute();
     $result = $stmt->get_result();
-    while ($row = $result->fetch_assoc()) { fputcsv($output, $row); }
+    while ($row = $result->fetch_assoc()) {
+        fputcsv($output, $row);
+    }
     $stmt->close();
     $conn->close();
     fclose($output);
@@ -147,7 +148,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
     $end_date = $_GET['end_date'] ?? '';
     $selected_status0 = $_GET['status0_type'] ?? 'ALL';
 
-    $ignore_date_validation = ($selected_status0 === '5');
+    $ignore_date_validation = in_array($selected_status0, ['5', 'DECLARED_NOT_IN']);
 
     if (!$ignore_date_validation && (empty($start_date) || empty($end_date))) {
         $user_message = "請輸入查詢的起訖日期。";
@@ -171,14 +172,8 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                 $params_for_where = [];
                 $types_for_where = "";
 
-                // 【*** 核心邏輯修正：智慧型日期欄位選擇 ***】
-                $date_column_to_filter = 'storage_in_datetime';
-                if ($selected_status0 === 'DECLARED_NOT_IN') {
-                    $date_column_to_filter = 'created_at';
-                }
-
-                if ($selected_status0 !== '5') {
-                    $where_clauses[] = "`{$date_column_to_filter}` BETWEEN ? AND ?";
+                if (!$ignore_date_validation) {
+                    $where_clauses[] = "storage_in_datetime BETWEEN ? AND ?";
                     $params_for_where[] = $start_date . " 00:00:00";
                     $params_for_where[] = $end_date . " 23:59:59";
                     $types_for_where .= "ss";
@@ -191,7 +186,8 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                 } elseif ($selected_status0 === 'LEAK_MISMATCH_NONZERO_OUT') {
                     $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out) AND packages_out != 0";
                 } elseif ($selected_status0 === 'DECLARED_NOT_IN') {
-                    $where_clauses[] = "master_no IS NOT NULL AND house_no IS NOT NULL AND storage_in_datetime IS NULL";
+                    // 【*** 核心邏輯修正 ***】
+                    $where_clauses[] = "master_no IS NOT NULL AND house_no IS NOT NULL AND release_datetime IS NULL AND storage_in_datetime IS NULL";
                 } elseif ($selected_status0 === 'RELEASED_NOT_OUT') {
                     $where_clauses[] = "release_datetime IS NOT NULL AND storage_in_datetime IS NOT NULL AND storage_out_datetime IS NULL";
                 } else {
@@ -340,7 +336,7 @@ $conn->close();
                     </div>
                 </form>
                 <p class="mt-4 text-sm text-gray-600">
-                    <span class="font-semibold text-gray-800">提示：</span>查詢範圍最長為 90 天。當選擇「已申報未進倉」時，日期範圍將比對資料建立時間(`created_at`)；其他選項則比對進倉時間(`storage_in_datetime`)。
+                    <span class="font-semibold text-gray-800">提示：</span>查詢範圍最長為 90 天，比對 `daily_outbound` 表的 `storage_in_datetime` 欄位。
                 </p>
             </div>
             <?php if (!empty($report_results)): ?>
