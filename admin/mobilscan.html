@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>網頁條碼掃描器</title>
+    <!-- 引入 Tailwind CSS 以快速美化介面 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 ZXing JS 函式庫 -->
+    <script type="text/javascript" src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
+    <style>
+        /* 自訂樣式，讓 video 元素能覆蓋並置中 */
+        #video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: auto;
+            overflow: hidden;
+            border-radius: 0.5rem; /* 圓角 */
+        }
+        #video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        #scan-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 80%;
+            height: 30%;
+            transform: translate(-50%, -50%);
+            border: 2px solid white;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); /* 黑色半透明遮罩 */
+            border-radius: 0.5rem;
+        }
+        #scan-line {
+            position: absolute;
+            top: 50%;
+            left: 5%;
+            width: 90%;
+            height: 2px;
+            background: red;
+            transform: translateY(-50%);
+            animation: scanning 2s infinite ease-in-out;
+        }
+        @keyframes scanning {
+            0% { top: 10%; }
+            50% { top: 90%; }
+            100% { top: 10%; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4 font-sans">
+
+    <div class="w-full max-w-md bg-white rounded-lg shadow-md p-6">
+        <h1 class="text-2xl font-bold text-center text-gray-800 mb-4">網頁條碼掃描器</h1>
+
+        <!-- 影片和掃描框容器 -->
+        <div id="video-container" class="bg-gray-900 mb-4 hidden">
+            <video id="video" playsinline></video>
+            <div id="scan-box">
+                <div id="scan-line"></div>
+            </div>
+        </div>
+
+        <!-- 控制按鈕 -->
+        <div class="flex space-x-4 mb-4">
+            <button id="startButton" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                開始掃描
+            </button>
+            <button id="resetButton" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300 hidden">
+                重新掃描
+            </button>
+        </div>
+
+        <!-- 狀態與結果顯示區域 -->
+        <div id="result-container" class="bg-gray-50 p-4 rounded-lg">
+             <label for="result" class="block text-sm font-medium text-gray-700">掃描狀態:</label>
+             <p id="status" class="mt-1 text-gray-600">請點擊「開始掃描」</p>
+             <label for="result" class="block text-sm font-medium text-gray-700 mt-4">掃描結果:</label>
+             <div class="relative">
+                <input type="text" id="result" readonly class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                <button id="copyButton" class="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-gray-700 hidden">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v3a2 2 0 01-2 2H4a2 2 0 01-2-2v-3z" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+        
+        <!-- 手動輸入區域 -->
+        <div class="mt-4">
+            <label for="manualInput" class="block text-sm font-medium text-gray-700">或手動輸入條碼:</label>
+            <input type="text" id="manualInput" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        // 確保 DOM 完全載入後再執行
+        window.addEventListener('load', function () {
+            // 初始化 ZXing 掃描器
+            const codeReader = new ZXing.BrowserMultiFormatReader();
+            let selectedDeviceId; // 用於儲存選擇的攝影機ID
+
+            // 取得 HTML 元素
+            const startButton = document.getElementById('startButton');
+            const resetButton = document.getElementById('resetButton');
+            const copyButton = document.getElementById('copyButton');
+            const videoContainer = document.getElementById('video-container');
+            const statusElement = document.getElementById('status');
+            const resultElement = document.getElementById('result');
+
+            // 啟動掃描按鈕事件
+            startButton.addEventListener('click', () => {
+                // UI 更新
+                videoContainer.classList.remove('hidden');
+                startButton.classList.add('hidden');
+                resetButton.classList.remove('hidden');
+                statusElement.textContent = '正在啟動相機...';
+
+                // 使用 decodeFromVideoDevice API
+                // 它會處理攝影機的選擇和串流
+                codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
+                    if (result) {
+                        // 掃描成功
+                        console.log(result);
+                        statusElement.textContent = '掃描成功！';
+                        resultElement.value = result.text;
+                        copyButton.classList.remove('hidden');
+                        
+                        // 播放提示音
+                        const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU'+Array(1e3).join('123'));
+                        audio.play();
+
+                        // 停止掃描
+                        codeReader.reset();
+                        
+                        // 可以在這裡將 result.text 送到後端伺服器
+                        // fetch('/api/barcode', { method: 'POST', body: JSON.stringify({ barcode: result.text }) });
+                        
+                    }
+                    if (err && !(err instanceof ZXing.NotFoundException)) {
+                        // 發生錯誤 (且不是「找不到條碼」的常規情況)
+                        console.error(err);
+                        statusElement.textContent = `掃描錯誤: ${err}`;
+                        resultElement.value = '';
+                        codeReader.reset();
+                    }
+                }).then(() => {
+                    statusElement.textContent = '請將條碼對準掃描框';
+                }).catch(err => {
+                    console.error("啟動相機失敗:", err);
+                    statusElement.textContent = `無法啟動相機: ${err}`;
+                    videoContainer.classList.add('hidden');
+                    startButton.classList.remove('hidden');
+                    resetButton.classList.add('hidden');
+                });
+            });
+
+            // 重新掃描按鈕事件
+            resetButton.addEventListener('click', () => {
+                codeReader.reset(); // 重置掃描器
+                resultElement.value = '';
+                statusElement.textContent = '已重置，請重新掃描。';
+                copyButton.classList.add('hidden');
+                // 重新觸發開始掃描的邏輯
+                startButton.click();
+            });
+            
+            // 複製按鈕事件
+            copyButton.addEventListener('click', () => {
+                resultElement.select();
+                document.execCommand('copy');
+                statusElement.textContent = '結果已複製到剪貼簿！';
+            });
+        });
+    </script>
+
+</body>
+</html>
