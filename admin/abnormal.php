@@ -70,8 +70,8 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     $end_date = $_GET['end_date'] ?? '';
     $selected_status0 = $_GET['status0_type'] ?? 'ALL';
 
-    // 再次進行日期驗證，防止惡意請求
-    if ($selected_status0 !== '5' && (empty($start_date) || empty($end_date) || !strtotime($start_date) || !strtotime($end_date) || strtotime($start_date) > strtotime($end_date) || floor((strtotime($end_date) - strtotime($start_date)) / (60 * 60 * 24)) > 90)) {
+    $ignore_date_validation = in_array($selected_status0, ['5', 'DECLARED_NOT_IN']);
+    if (!$ignore_date_validation && (empty($start_date) || empty($end_date) || !strtotime($start_date) || !strtotime($end_date) || strtotime($start_date) > strtotime($end_date))) {
         die("無效的匯出請求或日期範圍。");
     }
 
@@ -93,8 +93,7 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     $where_clauses = [];
     $params_for_where = [];
     $types_for_where = "";
-    
-    // 【*** 核心邏輯修正：智慧型日期欄位選擇 ***】
+
     $date_column_to_filter = 'storage_in_datetime';
     if ($selected_status0 === 'DECLARED_NOT_IN') {
         $date_column_to_filter = 'created_at';
@@ -145,11 +144,9 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     
     $stmt->execute();
     $result = $stmt->get_result();
-
     while ($row = $result->fetch_assoc()) {
         fputcsv($output, $row);
     }
-
     $stmt->close();
     $conn->close();
     fclose($output);
@@ -187,7 +184,6 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                 $params_for_where = [];
                 $types_for_where = "";
 
-                // 【*** 核心邏輯修正：智慧型日期欄位選擇 ***】
                 $date_column_to_filter = 'storage_in_datetime';
                 if ($selected_status0 === 'DECLARED_NOT_IN') {
                     $date_column_to_filter = 'created_at';
@@ -232,10 +228,9 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                 $offset = ($current_page - 1) * $records_per_page;
                 if ($offset < 0) $offset = 0;
 
+                // 【*** 核心邏輯修正：恢復為查詢所有欄位 ***】
                 $sql = "SELECT 
-                            master_no, house_no, total_packages, 
-                            packages_in, packages_out, clearance_method, storage_in_datetime, 
-                            storage_out_datetime, remark, status0
+                            *
                         FROM 
                             daily_outbound
                         WHERE 
@@ -366,16 +361,25 @@ $conn->close();
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th scope="col" class="table-header">主號</th> <th scope="col" class="table-header">分號</th>
-                                    <th scope="col" class="table-header">總件數</th> <th scope="col" class="table-header">已進倉件數</th>
-                                    <th scope="col" class="table-header">已出倉件數</th> <th scope="col" class="table-header">通關方式</th>
-                                    <th scope="col" class="table-header">進倉日期時間</th> <th scope="col" class="table-header">出倉日期時間</th>
-                                    <th scope="col" class="table-header">備註 (remark)</th> <th scope="col" class="table-header">狀態 (status0)</th>
+                                    <!-- 【*** 核心邏輯修正：恢復原始的、正確的表頭順序 ***】 -->
+                                    <th scope="col" class="table-header">報關單號</th>
+                                    <th scope="col" class="table-header">主號</th>
+                                    <th scope="col" class="table-header">分號</th>
+                                    <th scope="col" class="table-header">總件數</th>
+                                    <th scope="col" class="table-header">已進倉件數</th>
+                                    <th scope="col" class="table-header">已出倉件數</th>
+                                    <th scope="col" class="table-header">通關方式</th>
+                                    <th scope="col" class="table-header">進倉日期時間</th>
+                                    <th scope="col" class="table-header">出倉日期時間</th>
+                                    <th scope="col" class="table-header">備註 (remark)</th>
+                                    <th scope="col" class="table-header">狀態 (status0)</th>
                                 </tr>
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">
                                 <?php foreach ($report_results as $row): ?>
                                 <tr>
+                                    <!-- 【*** 核心邏輯修正：恢復原始的、正確的資料欄位對應 ***】 -->
+                                    <td class="table-cell"><?php echo htmlspecialchars($row['declaration_no']); ?></td>
                                     <td class="table-cell"><?php echo htmlspecialchars($row['master_no']); ?></td>
                                     <td class="table-cell"><?php echo htmlspecialchars($row['house_no']); ?></td>
                                     <td class="table-cell"><?php echo htmlspecialchars($row['total_packages']); ?></td>
