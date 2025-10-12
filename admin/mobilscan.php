@@ -13,21 +13,17 @@ if (!isset($_SESSION['user_id'])) {
 $user_full_name = $_SESSION['user_full_name'] ?? '未知使用者';
 $message = '';
 $message_type = '';
-$scanned_values_prefill = '';
+$scanned_value_prefill = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
-    $scanned_values_raw = trim($_POST['scanned_values']);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
+    $scanned_value = trim($_POST['scanned_value']);
     $action_type = $_POST['action_type'] ?? '';
     $manual_remark = trim($_POST['manual_remark'] ?? '');
 
-    if (empty($scanned_values_raw) || empty($action_type)) {
+    if (empty($scanned_value) || empty($action_type)) {
         $message = '錯誤：掃描內容和處理方式不能為空。';
         $message_type = 'error';
     } else {
-        // 將多行分號分割成陣列
-        $scanned_values = array_filter(array_map('trim', explode("\n", $scanned_values_raw)));
-        $processed_count = 0;
-
         try {
             $today = date('Y-m-d');
             $status0 = 0;
@@ -48,23 +44,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
             $pdo->beginTransaction();
 
             $stmt_check = $pdo->prepare("SELECT id FROM daily_outbound WHERE house_no = ?");
-            $stmt_update = $pdo->prepare("UPDATE daily_outbound SET status0 = ?, remark = ?, customer_name = ? WHERE house_no = ?");
-            $stmt_insert = $pdo->prepare("INSERT INTO daily_outbound (house_no, status0, remark, customer_name) VALUES (?, ?, ?, ?)");
+            $stmt_check->execute([$scanned_value]);
+            $existing_record = $stmt_check->fetch();
 
-            foreach($scanned_values as $scanned_value) {
-                $stmt_check->execute([$scanned_value]);
-                $existing_record = $stmt_check->fetch();
-
-                if ($existing_record) {
-                    $stmt_update->execute([$status0, $final_remark, $user_full_name, $scanned_value]);
-                } else {
-                    $stmt_insert->execute([$scanned_value, $status0, $final_remark, $user_full_name]);
-                }
-                $processed_count++;
+            if ($existing_record) {
+                $stmt_update = $pdo->prepare("UPDATE daily_outbound SET status0 = ?, remark = ?, customer_name = ? WHERE house_no = ?");
+                $stmt_update->execute([$status0, $final_remark, $user_full_name, $scanned_value]);
+                $message = "操作成功：分號 [{$scanned_value}] 的狀態已更新。";
+            } else {
+                $stmt_insert = $pdo->prepare("INSERT INTO daily_outbound (house_no, status0, remark, customer_name) VALUES (?, ?, ?, ?)");
+                $stmt_insert->execute([$scanned_value, $status0, $final_remark, $user_full_name]);
+                $message = "操作成功：分號 [{$scanned_value}] 不存在，已為您新增此筆異常記錄。";
             }
+            $processed_count = 1; // 修正為單次處理
 
             $pdo->commit();
-            $message = "操作成功！共處理了 {$processed_count} 筆分號。";
             $message_type = 'success';
 
         } catch (PDOException $e) {
@@ -89,13 +83,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
     <style>
         body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
         #scanner-container { position: relative; overflow: hidden; border-radius: 0.5rem; }
-        #video { width: 100%; height: auto; } /* 移除 transform，讓影像正常顯示 */
+        #video { width: 100%; height: auto; }
         .laser {
             position: absolute; top: 50%; left: 10%; right: 10%;
             height: 2px; background: red; box-shadow: 0 0 10px red;
             animation: scanning 2s infinite ease-in-out;
         }
         @keyframes scanning { 0% { top: 20%; } 50% { top: 80%; } 100% { top: 20%; } }
+        /* 【*** UI 修正：淺色主題 ***】 */
         .form-input { 
             @apply block w-full px-4 py-3 bg-gray-100 border-2 border-gray-300 rounded-lg text-lg text-black placeholder-gray-500 focus:outline-none focus:bg-white focus:border-blue-500 transition-colors;
         }
@@ -121,7 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
                 <video id="video" playsinline></video>
                 <div class="laser"></div>
             </div>
-            <button id="startButton" class="btn bg-blue-600 hover:bg-blue-700">
+            <button id="startButton" type="button" class="btn bg-blue-600 hover:bg-blue-700">
                 <span id="startButtonText" class="flex items-center justify-center">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
                     啟動相機
@@ -133,8 +128,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
         <!-- 表單 -->
         <form id="main-form" action="mobilscan.php" method="POST" class="space-y-6">
             <div>
-                <label for="scanned_values" class="block text-base font-medium text-gray-700 mb-2">分號 (House No.)</label>
-                <textarea name="scanned_values" id="scanned_values" rows="5" class="form-input" placeholder="掃描結果會顯示於此..." required><?php echo htmlspecialchars($scanned_values_prefill); ?></textarea>
+                <label for="scanned_value" class="block text-base font-medium text-gray-700 mb-2">分號 (House No.)</label>
+                <textarea name="scanned_value" id="scanned_value" rows="3" class="form-input" placeholder="掃描結果會顯示於此..." required><?php echo htmlspecialchars($scanned_value_prefill); ?></textarea>
             </div>
             
             <div>
@@ -167,10 +162,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
             const startButton = document.getElementById('startButton');
             const startButtonText = document.getElementById('startButtonText');
             const scannerContainer = document.getElementById('scanner-container');
-            const videoElement = document.getElementById('video');
-            const scannedValuesTextarea = document.getElementById('scanned_values');
+            const scannedValueTextarea = document.getElementById('scanned_value');
             const statusText = document.getElementById('status-text');
             const messageBox = document.getElementById('message-box');
+            const form = document.getElementById('main-form');
             let isScanning = false;
 
             function startScan() {
@@ -178,10 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
                 statusText.textContent = "正在請求相機權限...";
                 scannerContainer.classList.remove('hidden');
                 isScanning = true;
-                startButtonText.innerHTML = `
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                    關閉相機
-                `;
+                startButtonText.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>關閉相機`;
                 
                 codeReader.listVideoInputDevices()
                     .then((videoInputDevices) => {
@@ -193,9 +185,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
                         
                         codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
                             if (result) {
-                                // 【*** 核心邏輯修正：連續掃描 ***】
-                                const existingText = scannedValuesTextarea.value;
-                                scannedValuesTextarea.value = existingText + (existingText ? '\n' : '') + result.text;
+                                // 【*** 核心邏輯修正：單次掃描 ***】
+                                stopScan(); // 掃描成功後立刻關閉相機
+                                
+                                scannedValueTextarea.value = result.text;
                                 
                                 statusText.innerHTML = `<span class="font-bold text-blue-600">掃描成功 (${result.text})</span>`;
                                 
@@ -206,11 +199,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
                                 oscillator.frequency.setValueAtTime(900, audioContext.currentTime);
                                 oscillator.start();
                                 oscillator.stop(audioContext.currentTime + 0.1);
-
-                                // 1.5秒後清除成功訊息，準備掃描下一筆
-                                setTimeout(() => {
-                                    if(isScanning) statusText.textContent = "請將條碼對準掃描線...";
-                                }, 1500);
                             }
                             if (err && !(err instanceof ZXing.NotFoundException)) {
                                 console.error(err);
@@ -232,11 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
                 codeReader.reset();
                 scannerContainer.classList.add('hidden');
                 isScanning = false;
-                statusText.textContent = "";
-                startButtonText.innerHTML = `
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
-                    啟動相機
-                `;
+                startButtonText.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>啟動相機`;
             }
 
             startButton.addEventListener('click', () => {
@@ -245,6 +229,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_values'])) {
                 } else {
                     startScan();
                 }
+            });
+
+            // 【*** 核心邏輯修正：處理後重置 ***】
+            // 監聽表單提交事件，提交後清空輸入框，準備下一次掃描
+            form.addEventListener('submit', function() {
+                // 短暫延遲是為了確保表單能成功提交
+                setTimeout(() => {
+                    // 如果後端處理成功，PHP 會刷新頁面，這段 JS 可能不會被執行
+                    // 這是為了在 JavaScript 驅動的未來版本中提供更好的體驗
+                    if ('<?php echo $message_type; ?>' === 'success') {
+                         scannedValueTextarea.value = '';
+                         statusText.textContent = '已處理完成，可以開始下一次掃描。';
+                    }
+                }, 500);
             });
 
             if (window.location.protocol !== "https:" && window.location.hostname !== "localhost") {
