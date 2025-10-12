@@ -125,6 +125,10 @@ try {
                 <a href="abnormal.php" class="sidebar-link" target="contentFrame">
                     <span class="icon">✏️</span> 異常件查詢
                 </a>
+                <!-- 【*** 新增邏輯：增加手機掃碼連結，並在新視窗開啟 ***】 -->
+                <a href="mobilscan.php" class="sidebar-link" onclick="window.open(this.href, 'ScanWindow', 'width=500,height=800,scrollbars=yes,resizable=yes'); return false;">
+                    <span class="icon">📱</span> 手機掃碼
+                </a>
 		<a href="account.php" class="sidebar-link" target="contentFrame">
                     <span class="icon">👤</span> 帳號管理
                 </a>
