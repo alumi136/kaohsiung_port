@@ -108,7 +108,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
-        /* 【*** 全新 UI 設計 ***】 */
         .scanner-view {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -243,8 +242,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                         
                         codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
                             if (result) {
+                                // 【*** 核心邏輯修正 ***】
+                                // 1. 將掃描到的文字填入 textarea
                                 scannedValueTextarea.value = result.text;
-                                statusText.innerHTML = `<span class="font-bold text-green-400">掃描成功!</span>`;
+                                
+                                // 2. 更新狀態文字，顯示 "掃描成功" 並包含掃描到的條碼，使用深藍色
+                                statusText.innerHTML = `<span class="font-bold text-blue-400">掃描成功 (${result.text})</span>`;
+                                
+                                // 播放提示音
                                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
                                 const oscillator = audioContext.createOscillator();
                                 oscillator.connect(audioContext.destination);
@@ -252,6 +257,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                                 oscillator.frequency.setValueAtTime(900, audioContext.currentTime);
                                 oscillator.start();
                                 oscillator.stop(audioContext.currentTime + 0.1);
+                                
+                                // 停止掃描
                                 stopScan();
                             }
                             if (err && !(err instanceof ZXing.NotFoundException)) {
