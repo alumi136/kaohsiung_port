@@ -5,6 +5,10 @@
 set_time_limit(3600); // 增加腳本最大執行時間至 1 小時
 ini_set('memory_limit', '512M');
 
+// --- ☆☆☆ 修正 #2：設定腳本的預設時區為台北時間 ☆☆☆ ---
+date_default_timezone_set('Asia/Taipei');
+// --- ☆☆☆ 修正 #2 結束 ☆☆☆ ---
+
 require __DIR__ . '/vendor/autoload.php';
 
 use Google\Client as Google_Client;
@@ -29,7 +33,7 @@ const LOG_FILE = __DIR__ . '/original_processing.log';
 // --- 輔助函式庫 ---
 function write_log($message) {
     $memory = round(memory_get_usage(true) / 1024 / 1024, 2) . " MB";
-    $timestamp = date('Y-m-d H:i:s');
+    $timestamp = date('Y-m-d H:i:s'); // 現在會使用 Asia/Taipei 時區
     $formatted_message = "[{$timestamp}] [Mem: {$memory}] " . $message . PHP_EOL;
     file_put_contents(LOG_FILE, $formatted_message, FILE_APPEND);
     echo $formatted_message;
@@ -108,7 +112,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Original files cron job started (v30 - Package Count Check). ====");
+write_log("==== Original files cron job started (v31 - End-of-file & Timezone Fix). ====");
 
 try {
     $driveService = getGoogleDriveClient();
@@ -187,6 +191,15 @@ try {
                         } else {
                             $key_identifier_cell = trim($rowDataArray[2] ?? ''); // C
                         }
+
+                        // --- ☆☆☆ 修正 #1：檢查關鍵欄位是否為英數開頭，若否，則視為檔案結尾並停止讀取 ☆☆☆ ---
+                        // 檢查欄位有值，但開頭不是英文字母或數字
+                        if (!empty($key_identifier_cell) && preg_match('/^[A-Za-z0-9]/', $key_identifier_cell) === 0) {
+                            write_log("在第 {$rowIndex} 行偵測到非英數開頭的識別碼 '{$key_identifier_cell}'，判斷為檔案結尾，停止讀取此檔案。");
+                            break; // 跳出此 for 迴圈，不再讀取後續的行
+                        }
+                        // --- ☆☆☆ 修正 #1 結束 ☆☆☆ ---
+
                         if (empty($key_identifier_cell)) continue;
                         
                         $row_data = [
@@ -276,6 +289,7 @@ try {
                             $data_to_insert_chunk = [];
                         }
                     }
+                    // 當 break 生效時，會跳到這裡繼續執行
                 }
                 
                 if (!empty($data_to_insert_chunk)) {
@@ -308,4 +322,3 @@ try {
 
 write_log("==== Original files cron job finished. ====\n");
 ?>
-
