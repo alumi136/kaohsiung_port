@@ -55,7 +55,7 @@ if ($show_unclear_only) {
 $where_sql = count($where_clauses) > 0 ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
 
 
-// --- 【修正 #3】下載查詢結果 (CSV) ---
+// --- 下載查詢結果 (CSV) ---
 if (isset($_GET['download_csv'])) {
     try {
         // 查詢所有符合條件的資料，不分頁
@@ -266,7 +266,7 @@ $total_stmt->execute($params);
 $total_records = $total_stmt->fetchColumn();
 $total_pages = ceil($total_records / $records_per_page);
 
-// 【更新】調整排序：依照到港日期升冪排序 (最早的優先)，若日期相同則最新的在前面
+// 調整排序：依照到港日期升冪排序 (最早的優先)，若日期相同則最新的在前面
 $data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY arrival_date ASC, id DESC LIMIT $records_per_page OFFSET $offset";
 $data_stmt = $pdo->prepare($data_sql);
 $data_stmt->execute($params);
@@ -325,7 +325,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
             <div class="flex space-x-2">
                 <button type="submit" name="search" value="1" class="btn-primary flex-grow">查詢</button>
             </div>
-             <div class="flex space-x-2">
+            <div class="flex space-x-2">
                  <a href="?<?php echo http_build_query(array_merge($_GET, ['download_csv' => 1])); ?>" class="btn-success">下載查詢結果</a>
                  <button type="button" onclick="openModal('addModal')" class="btn-secondary">新增</button>
                  <button type="button" onclick="openModal('importModal')" class="btn-secondary">匯入</button>
@@ -356,7 +356,12 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php endif; ?>
                     
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">客戶配送別</th>
+                    
+                    <!-- 【最新修正】當進階顯示未勾選時，才顯示備註 -->
+                    <?php if (!$advanced_display): ?>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">備註</th>
+                    <?php endif; ?>
+                    
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
@@ -391,7 +396,12 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php endif; ?>
 
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['warehouse']); ?></td>
+
+                    <!-- 【最新修正】當進階顯示未勾選時，才顯示備註資料 -->
+                    <?php if (!$advanced_display): ?>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-gray-600"><?php echo htmlspecialchars($row['remarks']); ?></td>
+                    <?php endif; ?>
+
                     <td class="px-3 py-4 whitespace-nowrap text-sm">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?php echo $row['status'] ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'; ?>">
                             <?php echo $row['status'] ? '已通關' : '未通關'; ?>
@@ -440,6 +450,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 </div>
 
+<!-- 以下 Modal (彈出視窗) 區塊無修改 -->
 <div id="addModal" class="modal">
     <div class="modal-content">
         <h2 class="text-2xl font-bold mb-4">新增排櫃資料</h2>
