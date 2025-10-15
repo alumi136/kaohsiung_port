@@ -21,6 +21,103 @@ $error = '';
 $warning = '';
 $import_errors = [];
 
+// --- 查詢與分頁參數準備 (提前以供下載功能使用) ---
+$where_clauses = [];
+$params = [];
+
+if (empty($_GET) || (!isset($_GET['search']) && !isset($_GET['page']) && !isset($_GET['download_csv']))) {
+    $start_date = date('Y-m-d', strtotime('-2 days'));
+    $end_date = date('Y-m-d', strtotime('+1 day'));
+} else {
+    $start_date = $_GET['start_date'] ?? '';
+    $end_date = $_GET['end_date'] ?? '';
+}
+$keyword = $_GET['keyword'] ?? '';
+$advanced_display = isset($_GET['advanced_display']);
+$show_unclear_only = isset($_GET['show_unclear_only']);
+
+if (!empty($start_date)) {
+    $where_clauses[] = "arrival_date >= ?";
+    $params[] = $start_date;
+}
+if (!empty($end_date)) {
+    $where_clauses[] = "arrival_date <= ?";
+    $params[] = $end_date;
+}
+if (!empty($keyword)) {
+    $where_clauses[] = "(bl_number LIKE ? OR container_number LIKE ? OR vessel_name LIKE ?)";
+    $keyword_param = "%{$keyword}%";
+    array_push($params, $keyword_param, $keyword_param, $keyword_param);
+}
+if ($show_unclear_only) {
+    $where_clauses[] = "status = 0";
+}
+$where_sql = count($where_clauses) > 0 ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
+
+
+// --- 【修正 #3】下載查詢結果 (CSV) ---
+if (isset($_GET['download_csv'])) {
+    try {
+        // 查詢所有符合條件的資料，不分頁
+        $data_sql = "SELECT * FROM daily_arrange $where_sql ORDER BY arrival_date ASC, id DESC";
+        $data_stmt = $pdo->prepare($data_sql);
+        $data_stmt->execute($params);
+        
+        $filename = "arrange_export_" . date('Y-m-d_H-i-s') . ".csv";
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+
+        $output = fopen('php://output', 'w');
+        
+        // 寫入 UTF-8 BOM，確保 Excel 能正確讀取中文
+        fwrite($output, "\xEF\xBB\xBF");
+
+        // 定義 CSV 標頭
+        $headers = [
+            '到港日', '主單號', '櫃號', '船掛', '船名', '總件數', '重量', '客戶配送別', '備註', 
+            '狀態', '已進已出', '已進未出', '已申報未進倉', '未申報', '銷倉率(%)'
+        ];
+        fputcsv($output, $headers);
+
+        // 寫入資料
+        while ($row = $data_stmt->fetch(PDO::FETCH_ASSOC)) {
+            $status_text = $row['status'] ? '已通關' : '未通關';
+            $csv_row = [
+                $row['arrival_date'],
+                $row['bl_number'],
+                $row['container_number'],
+                $row['vessel_code'],
+                $row['vessel_name'],
+                $row['quantity'],
+                $row['weight'],
+                $row['warehouse'],
+                $row['remarks'],
+                $status_text,
+                $row['inandout'],
+                $row['innoout'],
+                $row['noin'],
+                $row['nodeclare'],
+                $row['scale']
+            ];
+            fputcsv($output, $csv_row);
+        }
+        
+        fclose($output);
+        exit();
+
+    } catch (PDOException $e) {
+        // 如果下載出錯，可以設定一個 session 錯誤訊息並重新導向
+        $_SESSION['download_error'] = "下載失敗：" . $e->getMessage();
+        header("Location: arrange.php");
+        exit();
+    }
+}
+if (isset($_SESSION['download_error'])) {
+    $error = $_SESSION['download_error'];
+    unset($_SESSION['download_error']);
+}
+
+
 // --- 後端邏輯處理 ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -163,38 +260,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])
 $records_per_page = 20;
 $current_page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $offset = ($current_page - 1) * $records_per_page;
-$where_clauses = [];
-$params = [];
 
-if (empty($_GET) || (!isset($_GET['search']) && !isset($_GET['page']))) {
-    $start_date = date('Y-m-d', strtotime('-2 days'));
-    $end_date = date('Y-m-d', strtotime('+1 day'));
-} else {
-    $start_date = $_GET['start_date'] ?? '';
-    $end_date = $_GET['end_date'] ?? '';
-}
-$keyword = $_GET['keyword'] ?? '';
-$advanced_display = isset($_GET['advanced_display']);
-$show_unclear_only = isset($_GET['show_unclear_only']);
-
-if (!empty($start_date)) {
-    $where_clauses[] = "arrival_date >= ?";
-    $params[] = $start_date;
-}
-if (!empty($end_date)) {
-    $where_clauses[] = "arrival_date <= ?";
-    $params[] = $end_date;
-}
-if (!empty($keyword)) {
-    $where_clauses[] = "(bl_number LIKE ? OR container_number LIKE ? OR vessel_name LIKE ?)";
-    $keyword_param = "%{$keyword}%";
-    array_push($params, $keyword_param, $keyword_param, $keyword_param);
-}
-if ($show_unclear_only) {
-    $where_clauses[] = "status = 0";
-}
-
-$where_sql = count($where_clauses) > 0 ? 'WHERE ' . implode(' AND ', $where_clauses) : '';
 $total_stmt = $pdo->prepare("SELECT COUNT(*) FROM daily_arrange $where_sql");
 $total_stmt->execute($params);
 $total_records = $total_stmt->fetchColumn();
@@ -222,6 +288,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         .form-input { @apply mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm; }
         .btn-primary { @apply inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700; }
         .btn-secondary { @apply inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-gray-700 bg-gray-200 hover:bg-gray-300; }
+        .btn-success { @apply inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700; }
     </style>
 </head>
 <body class="bg-gray-100 p-6">
@@ -234,7 +301,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     <?php if ($warning): ?><div class="mb-4 p-4 bg-yellow-100 text-yellow-700 rounded-lg"><?php echo $warning; ?></div><?php endif; ?>
 
     <div class="mb-6 p-4 bg-gray-50 rounded-lg">
-        <form action="arrange.php" method="GET" class="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
+        <form action="arrange.php" method="GET" class="grid grid-cols-1 md:grid-cols-7 gap-4 items-end">
             <div>
                 <label for="start_date" class="block text-sm font-medium text-gray-700 mb-1">起始日期</label>
                 <input type="date" name="start_date" id="start_date" class="form-input" value="<?php echo htmlspecialchars($start_date); ?>">
@@ -257,8 +324,11 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
             </div>
             <div class="flex space-x-2">
                 <button type="submit" name="search" value="1" class="btn-primary flex-grow">查詢</button>
-                <button type="button" onclick="openModal('addModal')" class="btn-secondary">新增</button>
-                <button type="button" onclick="openModal('importModal')" class="btn-secondary">匯入</button>
+            </div>
+             <div class="flex space-x-2">
+                 <a href="?<?php echo http_build_query(array_merge($_GET, ['download_csv' => 1])); ?>" class="btn-success">下載查詢結果</a>
+                 <button type="button" onclick="openModal('addModal')" class="btn-secondary">新增</button>
+                 <button type="button" onclick="openModal('importModal')" class="btn-secondary">匯入</button>
             </div>
         </form>
     </div>
@@ -270,7 +340,11 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">到港日</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">主單號</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">櫃號</th>
+                    
+                    <?php if (!$advanced_display): ?>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">船名</th>
+                    <?php endif; ?>
+
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">總件數</th>
                     
                     <?php if ($advanced_display): ?>
@@ -278,9 +352,11 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">已進未出</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">已申報未進倉</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">未申報</th>
+                    <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">銷倉率</th>
                     <?php endif; ?>
                     
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">客戶配送別</th>
+                    <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">備註</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
@@ -291,7 +367,11 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['arrival_date']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['bl_number']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['container_number']); ?></td>
+                    
+                    <?php if (!$advanced_display): ?>
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['vessel_name']); ?></td>
+                    <?php endif; ?>
+
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['quantity']); ?></td>
 
                     <?php if ($advanced_display): ?>
@@ -307,9 +387,11 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     </td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-red-600 font-semibold"><?php echo htmlspecialchars($row['noin']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-gray-500 font-semibold"><?php echo htmlspecialchars($row['nodeclare']); ?></td>
+                    <td class="px-3 py-4 whitespace-nowrap text-sm text-purple-600 font-bold"><?php echo htmlspecialchars($row['scale']); ?>%</td>
                     <?php endif; ?>
 
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><?php echo htmlspecialchars($row['warehouse']); ?></td>
+                    <td class="px-3 py-4 whitespace-nowrap text-sm text-gray-600"><?php echo htmlspecialchars($row['remarks']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?php echo $row['status'] ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'; ?>">
                             <?php echo $row['status'] ? '已通關' : '未通關'; ?>
@@ -456,4 +538,3 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 </script>
 </body>
 </html>
-
