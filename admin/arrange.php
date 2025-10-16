@@ -41,7 +41,7 @@ HTML;
     
     flush();
 
-    $command = '/usr/bin/php /var/www/google-drive-importer/original_drive_files.php >> /var/www/google-drive-importer/cron.log 2>&1';
+    $command = 'php /var/www/google-drive-importer/original_drive_files.php 2>&1';
     passthru($command, $return_code);
     
     echo "\n========================================\n";
