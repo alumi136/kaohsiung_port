@@ -1,29 +1,47 @@
 <?php
 session_start();
 
-// --- 【新增邏輯】處理背景腳本執行的請求 ---
-// 當頁面被 iframe 以 ?action=run_update 的方式請求時，執行此區塊
+// --- 【最新修正】處理背景腳本執行的請求，並輸出為帶有樣式的 HTML ---
 if (isset($_GET['action']) && $_GET['action'] === 'run_update') {
-    // 設定 HTTP 標頭，讓瀏覽器知道這是一個純文字的串流
-    header('Content-Type: text/plain; charset=utf-8');
+    // 1. 修改 HTTP 標頭為 text/html，告訴瀏覽器這是一個 HTML 頁面
+    header('Content-Type: text/html; charset=utf-8');
+    
     // 關閉輸出緩衝，確保 echo 的內容能即時送到瀏覽器
     @ob_end_flush();
     @ob_implicit_flush(true);
+
+    // 2. 輸出一小段 HTML 和 CSS，設定頁面樣式
+    echo <<<HTML
+    <!DOCTYPE html>
+    <html lang="zh-Hant">
+    <head>
+        <meta charset="UTF-8">
+        <title>更新進度</title>
+        <style>
+            body {
+                background-color: #1a202c; /* 深灰色背景 */
+                color: #e2e8f0;           /* 淺灰色 (白色) 文字 */
+                font-family: 'Courier New', Courier, monospace;
+                font-size: 14px;
+                line-height: 1.5;
+                margin: 0;
+                padding: 10px;
+                white-space: pre-wrap;   /* 保留空白字元並自動換行 */
+                word-wrap: break-word;
+            }
+        </style>
+    </head>
+    <body>
+HTML;
 
     echo "==== 開始執行原始資料更新程序 ====\n";
     echo "腳本路徑: original_drive_files.php\n";
     echo "開始時間: " . date('Y-m-d H:i:s') . "\n";
     echo "========================================\n\n";
     
-    // 強制將緩衝區內容送到瀏覽器
     flush();
 
-    // 組成要執行的命令
-    // '2>&1' 是關鍵，它會將標準錯誤(stderr)重導向到標準輸出(stdout)，這樣我們才能看到 PHP 的錯誤訊息
     $command = 'php ' . __DIR__ . '/original_drive_files.php 2>&1';
-
-    // 使用 passthru 來執行命令並即時輸出結果
-    // passthru 會直接將命令的輸出傳送到 PHP 的輸出緩衝區
     passthru($command, $return_code);
     
     echo "\n========================================\n";
@@ -32,9 +50,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'run_update') {
     echo "返回碼: " . $return_code . "\n";
     echo "==== 您現在可以關閉此視窗 ====\n";
     
-    // 確保所有輸出都已送出
+    // 3. 輸出 HTML 結尾標籤
+    echo '</body></html>';
+    
     flush();
-    exit(); // 結束執行，不渲染後續的 HTML
+    exit();
 }
 
 
@@ -232,21 +252,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         .btn-secondary { @apply inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-gray-700 bg-gray-200 hover:bg-gray-300; }
         .btn-success { @apply inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700; }
         .btn-danger { @apply inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700; }
-        
-        /* 【新增樣式】進度視窗的樣式 */
-        #log-container {
-            width: 100%;
-            height: 400px;
-            border: 1px solid #ccc;
-            background-color: #2d3748; /* 暗色背景 */
-            color: #f7fafc; /* 亮色文字 */
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 14px;
-            overflow-y: scroll;
-            padding: 10px;
-            border-radius: 5px;
-            white-space: pre-wrap; /* 自動換行 */
-        }
     </style>
 </head>
 <body class="bg-gray-100 p-6">
@@ -259,7 +264,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 
     <div class="mb-6 p-4 bg-gray-50 rounded-lg">
         <form action="arrange.php" method="GET" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-            <!-- 查詢欄位 ... (此處佈局微調以容納新按鈕) -->
             <div class="md:col-span-3 grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
                  <div>
                     <label for="start_date" class="block text-sm font-medium text-gray-700 mb-1">起始日期</label>
@@ -282,10 +286,8 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <label for="show_unclear_only" class="ml-2 block text-sm text-gray-900">只顯示未通關</label>
                 </div>
             </div>
-             <!-- 操作按鈕區 -->
             <div class="flex flex-col space-y-2 md:flex-row md:space-y-0 md:space-x-2">
                  <button type="submit" name="search" value="1" class="btn-primary w-full">查詢</button>
-                 <!-- 【新增功能】更新原始資料按鈕 -->
                  <button type="button" id="run-update-btn" onclick="runUpdateScript()" class="btn-danger w-full">更新原始資料</button>
                  <button type="button" onclick="openModal('addModal')" class="btn-secondary w-full">新增</button>
                  <button type="button" onclick="openModal('importModal')" class="btn-secondary w-full">匯入</button>
@@ -294,7 +296,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         </form>
     </div>
 
-    <!-- 表格顯示區 ... (無修改) ... -->
+    <!-- 表格顯示區 -->
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
@@ -355,7 +357,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         </table>
     </div>
 
-    <!-- 分頁 ... (無修改) ... -->
+    <!-- 分頁 -->
     <div class="mt-4 flex justify-between items-center">
         <div class="text-sm text-gray-700">共 <?php echo $total_records; ?> 筆資料，目前在第 <?php echo $current_page; ?> / <?php echo $total_pages; ?> 頁</div>
         <div>
@@ -375,23 +377,21 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 </div>
 
 <!-- Modal 區塊 -->
-<!-- ... (addModal, importModal, editModal 無修改) ... -->
 <div id="addModal" class="modal">...</div>
 <div id="importModal" class="modal">...</div>
 <div id="editModal" class="modal">...</div>
 
 
-<!-- 【新增功能】執行進度顯示 Modal -->
+<!-- 執行進度顯示 Modal -->
 <div id="updateProgressModal" class="modal">
     <div class="modal-content">
         <h2 id="update-modal-title" class="text-2xl font-bold mb-4">正在更新原始資料...</h2>
         <p class="text-sm text-gray-600 mb-4">系統正在從 Google Drive 下載檔案並執行資料清理，此過程可能需要數分鐘，請勿關閉此視窗。</p>
         
-        <!-- 用 iframe 來載入並顯示背景腳本的即時輸出 -->
-        <iframe id="log-iframe" class="w-full h-96 border border-gray-300 rounded-md bg-gray-900 text-white font-mono"></iframe>
+        <!-- 【最新修正】移除 iframe 上的樣式類別，由其內容自訂樣式 -->
+        <iframe id="log-iframe" class="w-full h-96 border border-gray-300 rounded-md"></iframe>
 
         <div class="mt-6 flex justify-end">
-            <!-- 這個按鈕一開始是隱藏的，腳本執行完畢後才會顯示 -->
             <button id="close-update-modal-btn" type="button" onclick="closeUpdateModal()" class="btn-primary" style="display: none;">完成並重整頁面</button>
         </div>
     </div>
@@ -425,29 +425,21 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     const logIframe = document.getElementById('log-iframe');
 
     function runUpdateScript() {
-        // 彈出確認對話框
         if (!confirm('確定要執行原始資料更新嗎？\n此過程將會從雲端下載最新資料並覆蓋，可能需要較長時間。')) {
             return;
         }
 
-        // 顯示 Modal
         updateModal.classList.add('active');
-        
-        // 設定 iframe 的 src，觸發背景腳本執行
         logIframe.src = 'arrange.php?action=run_update';
         
-        // 禁用按鈕，防止重複點擊
         updateBtn.disabled = true;
         updateBtn.textContent = '更新中...';
         updateBtn.classList.add('opacity-50', 'cursor-not-allowed');
 
-        // 監聽 iframe 的載入完成事件
         logIframe.onload = function() {
-            // 當 iframe 載入完成，代表背景腳本已經執行完畢
             updateModalTitle.textContent = '原始資料更新完成！';
-            closeUpdateBtn.style.display = 'inline-flex'; // 顯示關閉按鈕
+            closeUpdateBtn.style.display = 'inline-flex';
             
-            // 重新啟用主按鈕
             updateBtn.disabled = false;
             updateBtn.textContent = '更新原始資料';
             updateBtn.classList.remove('opacity-50', 'cursor-not-allowed');
@@ -455,9 +447,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     function closeUpdateModal() {
-        // 關閉 Modal
         updateModal.classList.remove('active');
-        // 重新載入頁面以顯示最新資料
         window.location.href = 'arrange.php';
     }
 </script>
