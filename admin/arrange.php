@@ -1,7 +1,7 @@
 <?php
 session_start();
 
-// --- 【最新修正】處理背景腳本執行的請求，並輸出為帶有樣式的 HTML ---
+// --- 處理背景腳本執行的請求，並輸出為帶有樣式的 HTML ---
 if (isset($_GET['action']) && $_GET['action'] === 'run_update') {
     // 1. 修改 HTTP 標頭為 text/html，告訴瀏覽器這是一個 HTML 頁面
     header('Content-Type: text/html; charset=utf-8');
@@ -41,7 +41,7 @@ HTML;
     
     flush();
 
-    $command = 'php ' '/var/www/google-drive-importer/original_drive_files.php 2>&1';
+    $command = 'php ' . __DIR__ . '/original_drive_files.php 2>&1';
     passthru($command, $return_code);
     
     echo "\n========================================\n";
@@ -158,7 +158,6 @@ if (isset($_SESSION['download_error'])) {
 
 
 // --- 後端邏輯處理 (POST, DELETE) ---
-// ... (此區塊無修改) ...
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         $action = $_POST['action'] ?? '';
@@ -196,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (empty($_POST['arrival_date']) || empty($_POST['bl_number']) || empty($_POST['container_number']) || empty($_POST['quantity']) || empty($_POST['warehouse'])) { $error = '新增失敗：必填欄位未填寫！'; } 
             else {
                 $stmt = $pdo->prepare("INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)");
-                $stmt->execute([$_POST['arrival_date'], $_POST['bl_number'], $_POST['container_number'], $_POST['vessel_code'], $_POST['vessel_name'], $_POST['quantity'], $_POST['weight'], $_POST['remarks']]);
+                $stmt->execute([$_POST['arrival_date'], $_POST['bl_number'], $_POST['container_number'], $_POST['vessel_code'], $_POST['vessel_name'], $_POST['quantity'], $_POST['weight'], $_POST['warehouse'], $_POST['remarks']]);
                 $message = '排櫃資料新增成功！';
             }
         } elseif ($action === 'edit') {
@@ -216,7 +215,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])
         $message = '資料刪除成功！';
     } catch (PDOException $e) { $error = "刪除失敗：" . $e->getMessage(); }
 }
-// ... (此區塊無修改) ...
 
 
 // --- 查詢與分頁 ---
@@ -377,9 +375,79 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 </div>
 
 <!-- Modal 區塊 -->
-<div id="addModal" class="modal">...</div>
-<div id="importModal" class="modal">...</div>
-<div id="editModal" class="modal">...</div>
+<div id="addModal" class="modal">
+    <div class="modal-content">
+        <h2 class="text-2xl font-bold mb-4">新增排櫃資料</h2>
+        <form action="arrange.php" method="POST">
+            <input type="hidden" name="action" value="add">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label>到港日期 (*)</label><input type="date" name="arrival_date" class="form-input" required></div>
+                <div><label>主單號 (*)</label><input type="text" name="bl_number" class="form-input" required></div>
+                <div><label>櫃號 (*)</label><input type="text" name="container_number" class="form-input" required></div>
+                <div><label>船掛</label><input type="text" name="vessel_code" class="form-input"></div>
+                <div><label>船名</label><input type="text" name="vessel_name" class="form-input"></div>
+                <div><label>總件數 (*)</label><input type="number" name="quantity" class="form-input" required></div>
+                <div><label>重量</label><input type="text" name="weight" class="form-input"></div>
+                <div><label>客戶配送別 (*)</label><input type="text" name="warehouse" class="form-input" required></div>
+                <div class="md:col-span-2"><label>備註</label><textarea name="remarks" class="form-input"></textarea></div>
+            </div>
+            <div class="mt-6 flex justify-end space-x-2">
+                <button type="button" onclick="closeModal('addModal')" class="btn-secondary">取消</button>
+                <button type="submit" class="btn-primary">確定新增</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="importModal" class="modal">
+    <div class="modal-content">
+        <h2 class="text-2xl font-bold mb-4">從 Excel 匯入</h2>
+        <form action="arrange.php" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="action" value="import">
+            <div>
+                <label for="csv_file" class="block text-sm font-medium text-gray-700">選擇 Excel 檔案 (.xlsx, .xls)</label>
+                <input type="file" name="csv_file" id="csv_file" required accept=".xlsx, .xls" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                <p class="mt-2 text-xs text-gray-500">必填欄位: 到港日期, 主單號(提單), 櫃號, 數量, 統倉(客戶配送別)。</p>
+            </div>
+            <div class="mt-6 flex justify-end space-x-2">
+                <button type="button" onclick="closeModal('importModal')" class="btn-secondary">取消</button>
+                <button type="submit" class="btn-primary">開始匯入</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="editModal" class="modal">
+    <div class="modal-content">
+        <h2 class="text-2xl font-bold mb-4">修改排櫃資料</h2>
+        <form action="arrange.php" method="POST">
+            <input type="hidden" name="action" value="edit">
+            <input type="hidden" name="id" id="edit-id">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label>到港日期 (*)</label><input type="date" name="arrival_date" id="edit-arrival_date" class="form-input" required></div>
+                <div><label>主單號 (*)</label><input type="text" name="bl_number" id="edit-bl_number" class="form-input" required></div>
+                <div><label>櫃號 (*)</label><input type="text" name="container_number" id="edit-container_number" class="form-input" required></div>
+                <div><label>船掛</label><input type="text" name="vessel_code" id="edit-vessel_code" class="form-input"></div>
+                <div><label>船名</label><input type="text" name="vessel_name" id="edit-vessel_name" class="form-input"></div>
+                <div><label>總件數 (*)</label><input type="number" name="quantity" id="edit-quantity" class="form-input" required></div>
+                <div><label>重量</label><input type="text" name="weight" id="edit-weight" class="form-input"></div>
+                <div><label>客戶配送別 (*)</label><input type="text" name="warehouse" id="edit-warehouse" class="form-input" required></div>
+                <div class="md:col-span-2"><label>備註</label><textarea name="remarks" id="edit-remarks" class="form-input"></textarea></div>
+                <div class="md:col-span-2">
+                    <label>狀態</label>
+                    <select name="status" id="edit-status" class="form-input">
+                        <option value="0">未通關</option>
+                        <option value="1">已通關</option>
+                    </select>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end space-x-2">
+                <button type="button" onclick="closeModal('editModal')" class="btn-secondary">取消</button>
+                <button type="submit" class="btn-primary">確定修改</button>
+            </div>
+        </form>
+    </div>
+</div>
 
 
 <!-- 執行進度顯示 Modal -->
@@ -388,7 +456,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         <h2 id="update-modal-title" class="text-2xl font-bold mb-4">正在更新原始資料...</h2>
         <p class="text-sm text-gray-600 mb-4">系統正在從 Google Drive 下載檔案並執行資料清理，此過程可能需要數分鐘，請勿關閉此視窗。</p>
         
-        <!-- 【最新修正】移除 iframe 上的樣式類別，由其內容自訂樣式 -->
         <iframe id="log-iframe" class="w-full h-96 border border-gray-300 rounded-md"></iframe>
 
         <div class="mt-6 flex justify-end">
@@ -399,7 +466,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
 <script>
-    // --- 原有 Modal 相關 script ---
     function openModal(modalId) { document.getElementById(modalId).classList.add('active'); }
     function closeModal(modalId) { document.getElementById(modalId).classList.remove('active'); }
     function openEditModal(data) {
@@ -417,7 +483,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         openModal('editModal');
     }
 
-    // --- 【新增功能】控制更新進度 Modal 的 script ---
     const updateModal = document.getElementById('updateProgressModal');
     const updateBtn = document.getElementById('run-update-btn');
     const updateModalTitle = document.getElementById('update-modal-title');
