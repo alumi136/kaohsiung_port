@@ -1,15 +1,17 @@
 <?php
 // ☆☆☆☆ 這是一個 CLI (命令列介面) 腳本 ☆☆☆☆
-// 說明: 智慧判斷 Excel 格式，使用 spout (處理 .xlsx) 或 優化後的 PhpSpreadsheet (處理 .xls) 來高效處理檔案。
+// 說明: 智慧判斷 Excel 格式，並使用最佳的串流讀取器來高效處理檔案。
 
 set_time_limit(3600);
 ini_set('memory_limit', '512M');
 
 require __DIR__ . '/vendor/autoload.php';
 
+// 【*** 核心變更：同時引入所有需要的函式庫 ***】
 use Google\Client as Google_Client;
 use Google\Service\Drive as Google_Service_Drive;
 use Box\Spout\Reader\Common\Creator\ReaderEntityFactory;
+use Shuchkin\SimpleXLS;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Shared\Date;
 
@@ -26,13 +28,12 @@ $db_config = [
 const TARGET_TABLE = 'daily_outbound';
 const LOG_FILE = __DIR__ . '/daily_outbound.log';
 
-// 【*** 核心邏輯：實作 IReadFilter 介面，用於分塊讀取 ***】
+// --- IReadFilter for PhpSpreadsheet ---
 class XlsChunkReadFilter implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter {
     private $startRow = 0; private $endRow = 0;
     public function setRows($startRow, $chunkSize) { $this->startRow = $startRow; $this->endRow = $startRow + $chunkSize; }
     public function readCell($columnAddress, $row, $worksheetName = '') { return ($row >= $this->startRow && $row < $this->endRow); }
 }
-
 
 // --- 輔助函式庫 ---
 function write_log($message) {
@@ -115,7 +116,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Cron job started (v5.0 - Optimized XLS Chunking). ====");
+write_log("==== Cron job started (v7.0 - Fallback Logic). ====");
 
 try {
     $driveService = getGoogleDriveClient();
@@ -151,9 +152,11 @@ try {
                 if ($file_extension === 'xlsx') {
                     write_log("偵測到 XLSX 格式，使用 Spout 串流模式處理...");
                     $total_inserted_rows = processWithSpout($conn, $file_tmp_path);
+                } elseif ($file_extension === 'xls') {
+                    write_log("偵測到 XLS 格式，優先嘗試 SimpleXLS 串流模式...");
+                    $total_inserted_rows = processWithSimpleXLS($conn, $file_tmp_path);
                 } else {
-                    write_log("偵測到 XLS 格式，使用 [優化版 PhpSpreadsheet] 模式處理...");
-                    $total_inserted_rows = processWithPhpSpreadsheet($conn, $file_tmp_path);
+                    throw new Exception("不支援的檔案格式: {$file_extension}");
                 }
 
                 $conn->commit();
@@ -179,30 +182,22 @@ try {
 write_log("==== Cron job finished. ====\n");
 
 
-// 【*** Spout 處理器 (for .xlsx) ***】
+// 【*** Spout 處理器 (for .xlsx) - 無變更 ***】
 function processWithSpout($conn, $filePath) {
+    // ... 此函式內容與 v6.0 版本完全相同 ...
     $reader = ReaderEntityFactory::createReaderFromFile($filePath);
     $reader->open($filePath);
-    
-    $total_rows = 0;
-    $chunk_size = 2000;
-    $data_to_insert_chunk = [];
-
+    $total_rows = 0; $chunk_size = 2000; $data_to_insert_chunk = [];
     foreach ($reader->getSheetIterator() as $sheet) {
         foreach ($sheet->getRowIterator() as $rowIndex => $row) {
             if ($rowIndex === 1) continue;
-            
             $rowDataArray = $row->toArray();
-            
             $house_no_cell = trim($rowDataArray[2] ?? '');
             if (empty($house_no_cell)) continue;
-            
             $row_data = [
                 'declaration_no' => $rowDataArray[0] ?? null, 'master_no' => $rowDataArray[1] ?? null, 'house_no' => $house_no_cell,
                 'weight' => !empty($rowDataArray[3]) ? (float)$rowDataArray[3] : 0,
-                'total_packages' => !empty($rowDataArray[4]) ? (int)$rowDataArray[4] : 0,
-                'packages_in' => !empty($rowDataArray[5]) ? (int)$rowDataArray[5] : 0,
-                'packages_out' => !empty($rowDataArray[6]) ? (int)$rowDataArray[6] : 0,
+                'total_packages' => !empty($rowDataArray[4]) ? (int)$rowDataArray[4] : 0, 'packages_in' => !empty($rowDataArray[5]) ? (int)$rowDataArray[5] : 0, 'packages_out' => !empty($rowDataArray[6]) ? (int)$rowDataArray[6] : 0,
                 'clearance_method' => $rowDataArray[7] ?? null, 'declaration_type' => $rowDataArray[8] ?? null,
                 'carrier_id' => $rowDataArray[9] ?? null, 'route' => $rowDataArray[10] ?? null,
                 'storage_in_datetime' => parse_date_value($rowDataArray[11] ?? null),
@@ -211,67 +206,98 @@ function processWithSpout($conn, $filePath) {
                 'remark' => null, 'status0' => 0
             ];
             $data_to_insert_chunk[] = $row_data;
-
             if (count($data_to_insert_chunk) >= $chunk_size) {
-                $inserted = batch_insert($conn, $data_to_insert_chunk);
-                $total_rows += $inserted;
-                write_log("Spout: 已寫入 {$inserted} 筆資料 (累計: {$total_rows})...");
-                $data_to_insert_chunk = [];
+                $inserted = batch_insert($conn, $data_to_insert_chunk); $total_rows += $inserted;
+                write_log("Spout: 已寫入 {$inserted} 筆資料 (累計: {$total_rows})..."); $data_to_insert_chunk = [];
             }
         }
     }
-
     if (!empty($data_to_insert_chunk)) {
-        $inserted = batch_insert($conn, $data_to_insert_chunk);
-        $total_rows += $inserted;
+        $inserted = batch_insert($conn, $data_to_insert_chunk); $total_rows += $inserted;
         write_log("Spout: 已寫入最後 {$inserted} 筆資料 (累計: {$total_rows})...");
     }
-    
-    $reader->close();
-    return $total_rows;
+    $reader->close(); return $total_rows;
 }
 
-// 【*** 全新優化邏輯：使用 PhpSpreadsheet 處理 XLS 檔案 ***】
+// 【*** 全新函式：整合 SimpleXLS 與 PhpSpreadsheet 作為備用方案 ***】
+function processWithSimpleXLS($conn, $filePath) {
+    if ( $xls = SimpleXLS::parse($filePath) ) {
+        // 如果成功，代表是標準的 XLS 檔案，使用高效能的 SimpleXLS
+        write_log("SimpleXLS: 成功解析為標準 XLS 檔案，開始串流處理...");
+        $total_rows = 0;
+        $chunk_size = 2000;
+        $data_to_insert_chunk = [];
+        $is_header = true;
+
+        foreach( $xls->rows() as $rowDataArray ) {
+            if ($is_header) { $is_header = false; continue; }
+            $house_no_cell = trim($rowDataArray[2] ?? '');
+            if (empty($house_no_cell)) continue;
+            $row_data = [
+                'declaration_no' => $rowDataArray[0] ?? null, 'master_no' => $rowDataArray[1] ?? null, 'house_no' => $house_no_cell,
+                'weight' => !empty($rowDataArray[3]) ? (float)$rowDataArray[3] : 0,
+                'total_packages' => !empty($rowDataArray[4]) ? (int)$rowDataArray[4] : 0, 'packages_in' => !empty($rowDataArray[5]) ? (int)$rowDataArray[5] : 0, 'packages_out' => !empty($rowDataArray[6]) ? (int)$rowDataArray[6] : 0,
+                'clearance_method' => $rowDataArray[7] ?? null, 'declaration_type' => $rowDataArray[8] ?? null,
+                'carrier_id' => $rowDataArray[9] ?? null, 'route' => $rowDataArray[10] ?? null,
+                'storage_in_datetime' => parse_date_value($rowDataArray[11] ?? null),
+                'storage_out_datetime' => parse_date_value($rowDataArray[12] ?? null),
+                'status' => $rowDataArray[13] ?? null, 'customer_name' => $rowDataArray[14] ?? null,
+                'remark' => null, 'status0' => 0
+            ];
+            $data_to_insert_chunk[] = $row_data;
+            if (count($data_to_insert_chunk) >= $chunk_size) {
+                $inserted = batch_insert($conn, $data_to_insert_chunk); $total_rows += $inserted;
+                write_log("SimpleXLS: 已寫入 {$inserted} 筆資料 (累計: {$total_rows})..."); $data_to_insert_chunk = [];
+            }
+        }
+        if (!empty($data_to_insert_chunk)) {
+            $inserted = batch_insert($conn, $data_to_insert_chunk); $total_rows += $inserted;
+            write_log("SimpleXLS: 已寫入最後 {$inserted} 筆資料 (累計: {$total_rows})...");
+        }
+        return $total_rows;
+    } else {
+        // 如果失敗，檢查是否為 "File is not XLS" 錯誤
+        if (strpos(SimpleXLS::parseError(), 'File is not XLS') !== false) {
+            write_log("SimpleXLS 解析失敗: " . SimpleXLS::parseError() . "。這可能是一個偽裝的 XLS 檔案，正在啟動 PhpSpreadsheet 作為備用方案...");
+            // 如果是，則呼叫 PhpSpreadsheet 進行處理
+            return processWithPhpSpreadsheet($conn, $filePath);
+        } else {
+            // 如果是其他類型的錯誤，則直接拋出
+            throw new Exception('SimpleXLS 解析時發生未知錯誤: ' . SimpleXLS::parseError());
+        }
+    }
+}
+
+// 【*** 備用函式：使用 PhpSpreadsheet 處理非標準的 XLS 檔案 ***】
 function processWithPhpSpreadsheet($conn, $filePath) {
     $reader = IOFactory::createReaderForFile($filePath);
     $reader->setReadDataOnly(true);
     
     $total_rows = 0;
-    $chunk_size = 2000; // 每次讀取 2000 行
+    $chunk_size = 1000; // 對於可能較耗資源的 PhpSpreadsheet，批次縮小一點
     $chunkFilter = new XlsChunkReadFilter();
     $reader->setReadFilter($chunkFilter);
 
-    // 先獲取總行數
     $worksheetInfo = $reader->listWorksheetInfo($filePath);
     $highestRow = $worksheetInfo[0]['totalRows'];
-    write_log("PhpSpreadsheet: 偵測到總行數: {$highestRow}");
+    write_log("PhpSpreadsheet (備用): 偵測到總行數: {$highestRow}");
 
-    // 分塊循環
     for ($startRow = 2; $startRow <= $highestRow; $startRow += $chunk_size) {
-        write_log("PhpSpreadsheet: 準備讀取第 {$startRow} 行至 " . ($startRow + $chunk_size - 1) . " 行...");
+        write_log("PhpSpreadsheet (備用): 準備讀取第 {$startRow} 行至 " . ($startRow + $chunk_size - 1) . " 行...");
         $chunkFilter->setRows($startRow, $chunk_size);
         $spreadsheet = $reader->load($filePath);
         $worksheet = $spreadsheet->getActiveSheet();
-        write_log("PhpSpreadsheet: 區塊已載入記憶體。");
         
         $data_to_insert_chunk = [];
-        
-        // 【優化】改用 rangeToArray 一次性將區塊資料讀入陣列
-        $chunkData = $worksheet->rangeToArray(
-            'A' . $startRow . ':' . $worksheet->getHighestColumn() . ($startRow + $chunk_size - 1), 
-            null, true, true, true
-        );
+        $chunkData = $worksheet->rangeToArray('A' . $startRow . ':' . $worksheet->getHighestColumn() . ($startRow + $chunk_size - 1), null, true, true, true);
 
         foreach ($chunkData as $rowIndex => $rowDataArray) {
             $house_no_cell = trim($rowDataArray['C'] ?? '');
             if (empty($house_no_cell)) continue;
-
             $row_data = [
                 'declaration_no' => $rowDataArray['A'] ?? null, 'master_no' => $rowDataArray['B'] ?? null, 'house_no' => $house_no_cell,
                 'weight' => !empty($rowDataArray['D']) ? (float)$rowDataArray['D'] : 0,
-                'total_packages' => !empty($rowDataArray['E']) ? (int)$rowDataArray['E'] : 0,
-                'packages_in' => !empty($rowDataArray['F']) ? (int)$rowDataArray['F'] : 0,
-                'packages_out' => !empty($rowDataArray['G']) ? (int)$rowDataArray['G'] : 0,
+                'total_packages' => !empty($rowDataArray['E']) ? (int)$rowDataArray['E'] : 0, 'packages_in' => !empty($rowDataArray['F']) ? (int)$rowDataArray['F'] : 0, 'packages_out' => !empty($rowDataArray['G']) ? (int)$rowDataArray['G'] : 0,
                 'clearance_method' => $rowDataArray['H'] ?? null, 'declaration_type' => $rowDataArray['I'] ?? null,
                 'carrier_id' => $rowDataArray['J'] ?? null, 'route' => $rowDataArray['K'] ?? null,
                 'storage_in_datetime' => parse_date_value($rowDataArray['L'] ?? null),
@@ -285,13 +311,11 @@ function processWithPhpSpreadsheet($conn, $filePath) {
         if (!empty($data_to_insert_chunk)) {
             $inserted = batch_insert($conn, $data_to_insert_chunk);
             $total_rows += $inserted;
-            write_log("PhpSpreadsheet: 已寫入 {$inserted} 筆資料 (累計: {$total_rows})...");
+            write_log("PhpSpreadsheet (備用): 已寫入 {$inserted} 筆資料 (累計: {$total_rows})...");
         }
         
-        // 【優化】積極釋放記憶體
         $spreadsheet->disconnectWorksheets();
         unset($spreadsheet);
-        write_log("PhpSpreadsheet: 區塊記憶體已釋放。");
     }
     return $total_rows;
 }
