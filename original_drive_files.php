@@ -1,13 +1,14 @@
 <?php
 // ☆☆☆☆ 這是一個 CLI (命令列介面) 腳本 ☆☆☆☆
-// 任務：從 Google Drive 下載多種格式的 Excel 檔案，分析後寫入 daily_outbound 資料表。
+// 任務：
+// 1. 從 Google Drive 下載多種格式的 Excel 檔案，分析後寫入 daily_outbound 資料表。
+// 2. 在所有檔案處理完畢後，執行兩步驟的資料清理程序，確保資料的唯一性與完整性。
 
-set_time_limit(3600); // 增加腳本最大執行時間至 1 小時
+set_time_limit(7200); // 增加腳本最大執行時間至 2 小時 (包含清理時間)
 ini_set('memory_limit', '512M');
 
-// --- ☆☆☆ 修正 #2：設定腳本的預設時區為台北時間 ☆☆☆ ---
+// 設定腳本的預設時區為台北時間
 date_default_timezone_set('Asia/Taipei');
-// --- ☆☆☆ 修正 #2 結束 ☆☆☆ ---
 
 require __DIR__ . '/vendor/autoload.php';
 
@@ -33,7 +34,7 @@ const LOG_FILE = __DIR__ . '/original_processing.log';
 // --- 輔助函式庫 ---
 function write_log($message) {
     $memory = round(memory_get_usage(true) / 1024 / 1024, 2) . " MB";
-    $timestamp = date('Y-m-d H:i:s'); // 現在會使用 Asia/Taipei 時區
+    $timestamp = date('Y-m-d H:i:s');
     $formatted_message = "[{$timestamp}] [Mem: {$memory}] " . $message . PHP_EOL;
     file_put_contents(LOG_FILE, $formatted_message, FILE_APPEND);
     echo $formatted_message;
@@ -112,7 +113,8 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Original files cron job started (v31 - End-of-file & Timezone Fix). ====");
+write_log("==== Original files cron job started (v32 - Integrated Cleanup). ====");
+$files_were_processed = false;
 
 try {
     $driveService = getGoogleDriveClient();
@@ -122,6 +124,7 @@ try {
     if (count($results->getFiles()) == 0) {
         write_log("在 'original_daily_in' 資料夾中未找到新檔案。");
     } else {
+        $files_were_processed = true;
         foreach ($results->getFiles() as $file) {
             $file_id = $file->getId();
             $file_name = $file->getName();
@@ -192,13 +195,10 @@ try {
                             $key_identifier_cell = trim($rowDataArray[2] ?? ''); // C
                         }
 
-                        // --- ☆☆☆ 修正 #1：檢查關鍵欄位是否為英數開頭，若否，則視為檔案結尾並停止讀取 ☆☆☆ ---
-                        // 檢查欄位有值，但開頭不是英文字母或數字
                         if (!empty($key_identifier_cell) && preg_match('/^[A-Za-z0-9]/', $key_identifier_cell) === 0) {
                             write_log("在第 {$rowIndex} 行偵測到非英數開頭的識別碼 '{$key_identifier_cell}'，判斷為檔案結尾，停止讀取此檔案。");
-                            break; // 跳出此 for 迴圈，不再讀取後續的行
+                            break;
                         }
-                        // --- ☆☆☆ 修正 #1 結束 ☆☆☆ ---
 
                         if (empty($key_identifier_cell)) continue;
                         
@@ -211,8 +211,6 @@ try {
                             'remark' => null, 'status0' => 0
                         ];
 
-                        // 【*** 核心邏輯修正：在此處進行件數判斷 ***】
-                        $is_packages_consistent = false;
                         $temp_total = 0; $temp_in = 0; $temp_out = 0;
 
                         switch ($file_type) {
@@ -230,7 +228,7 @@ try {
                                 $row_data['weight'] = (float)($rowDataArray[10] ?? 0);
                                 $row_data['remark'] = $rowDataArray[12] ?? null;
                                 
-                                if ($temp_total === $temp_in && $temp_in === $temp_out) {
+                                if ($temp_total === $temp_in && $temp_in === $temp_out && $temp_total > 0) {
                                     $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[0] ?? null);
                                 }
                                 break;
@@ -275,7 +273,7 @@ try {
                                 $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[11] ?? null);
                                 $row_data['clearance_method'] = $rowDataArray[13] ?? null;
 
-                                if ($temp_total === $temp_in && $temp_in === $temp_out) {
+                                if ($temp_total === $temp_in && $temp_in === $temp_out && $temp_total > 0) {
                                     $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[12] ?? null);
                                 }
                                 break;
@@ -289,7 +287,6 @@ try {
                             $data_to_insert_chunk = [];
                         }
                     }
-                    // 當 break 生效時，會跳到這裡繼續執行
                 }
                 
                 if (!empty($data_to_insert_chunk)) {
@@ -311,11 +308,143 @@ try {
                 if ($transaction_started) $conn->rollback();
                 write_log("嚴重錯誤: 處理檔案 '{$file_name}' 時發生例外: " . $e->getMessage());
             } finally {
-                $conn->close();
+                if (isset($conn) && $conn->ping()) {
+                    $conn->close();
+                }
                 unlink($file_tmp_path);
             }
         }
     }
+
+    // --- 【新增邏輯】在所有檔案處理完畢後，執行資料清理程序 ---
+    if ($files_were_processed) {
+        write_log("所有檔案匯入完成，準備開始執行資料清理程序...");
+
+        // 重新建立資料庫連線
+        $conn_cleanup = new mysqli($db_config['servername'], $db_config['username'], $db_config['password'], $db_config['dbname']);
+        if ($conn_cleanup->connect_error) {
+            throw new Exception("清理程序：資料庫連線失敗: " . $conn_cleanup->connect_error);
+        }
+        $conn_cleanup->set_charset("utf8mb4");
+
+        try {
+            // --- 等待一分鐘 ---
+            write_log("等待 60 秒，確保資料庫同步...");
+            sleep(60);
+
+            // --- 第一步：全面性的資訊合併更新 ---
+            write_log("步驟 1/2: 正在合併重複資料，創建黃金紀錄...");
+            $sql_update = "
+            UPDATE
+                daily_outbound AS t_to_update
+            JOIN
+                (
+                    SELECT
+                        t_max_id.max_id,
+                        COALESCE(t_newest.declaration_no, MAX(t_all.declaration_no)) AS final_declaration_no,
+                        COALESCE(t_newest.master_no, MAX(t_all.master_no)) AS final_master_no,
+                        COALESCE(t_newest.house_no, MAX(t_all.house_no)) AS final_house_no,
+                        COALESCE(t_newest.weight, MAX(t_all.weight)) AS final_weight,
+                        COALESCE(t_newest.total_packages, MAX(t_all.total_packages)) AS final_total_packages,
+                        COALESCE(t_newest.packages_in, MAX(t_all.packages_in)) AS final_packages_in,
+                        COALESCE(t_newest.packages_out, MAX(t_all.packages_out)) AS final_packages_out,
+                        COALESCE(t_newest.clearance_method, MAX(t_all.clearance_method)) AS final_clearance_method,
+                        COALESCE(t_newest.declaration_type, MAX(t_all.declaration_type)) AS final_declaration_type,
+                        COALESCE(t_newest.carrier_id, MAX(t_all.carrier_id)) AS final_carrier_id,
+                        COALESCE(t_newest.route, MAX(t_all.route)) AS final_route,
+                        COALESCE(t_newest.customer_name, MAX(t_all.customer_name)) AS final_customer_name,
+                        COALESCE(t_newest.remark, MAX(t_all.remark)) AS final_remark,
+                        COALESCE(t_newest.status0, MAX(t_all.status0)) AS final_status0,
+                        MAX(t_all.storage_in_datetime) AS final_storage_in_datetime,
+                        MAX(t_all.release_datetime) AS final_release_datetime,
+                        MAX(t_all.storage_out_datetime) AS unconditional_storage_out_datetime
+                    FROM
+                        (SELECT master_no, house_no, MAX(id) as max_id
+                         FROM daily_outbound
+                         GROUP BY master_no, house_no
+                         HAVING COUNT(*) > 1) AS t_max_id
+                    JOIN daily_outbound AS t_all ON t_all.master_no = t_max_id.master_no AND t_all.house_no = t_max_id.house_no
+                    JOIN daily_outbound AS t_newest ON t_newest.id = t_max_id.max_id
+                    GROUP BY
+                        t_max_id.master_no, t_max_id.house_no, t_max_id.max_id
+                ) AS t_source
+            ON
+                t_to_update.id = t_source.max_id
+            SET
+                t_to_update.declaration_no = t_source.final_declaration_no,
+                t_to_update.master_no = t_source.final_master_no,
+                t_to_update.house_no = t_source.final_house_no,
+                t_to_update.weight = t_source.final_weight,
+                t_to_update.total_packages = t_source.final_total_packages,
+                t_to_update.packages_in = t_source.final_packages_in,
+                t_to_update.packages_out = t_source.final_packages_out,
+                t_to_update.clearance_method = t_source.final_clearance_method,
+                t_to_update.declaration_type = t_source.final_declaration_type,
+                t_to_update.carrier_id = t_source.final_carrier_id,
+                t_to_update.route = t_source.final_route,
+                t_to_update.customer_name = t_source.final_customer_name,
+                t_to_update.remark = t_source.final_remark,
+                t_to_update.status0 = t_source.final_status0,
+                t_to_update.storage_in_datetime = t_source.final_storage_in_datetime,
+                t_to_update.release_datetime = t_source.final_release_datetime,
+                t_to_update.storage_out_datetime = CASE
+                    WHEN t_source.final_total_packages = t_source.final_packages_in AND t_source.final_total_packages = t_source.final_packages_out AND t_source.final_total_packages > 0
+                    THEN t_source.unconditional_storage_out_datetime
+                    ELSE NULL
+                END;
+            ";
+            
+            if ($conn_cleanup->query($sql_update) === TRUE) {
+                write_log("步驟 1/2 成功: " . $conn_cleanup->affected_rows . " 筆黃金紀錄已更新。");
+            } else {
+                throw new Exception("步驟 1/2 失敗: " . $conn_cleanup->error);
+            }
+
+            // --- 等待一分鐘 ---
+            write_log("等待 60 秒，確保更新操作完成...");
+            sleep(60);
+
+            // --- 第二步：安全刪除舊的重複紀錄 ---
+            write_log("步驟 2/2: 正在刪除舊的重複資料...");
+            $sql_delete = "
+            DELETE t1 FROM daily_outbound t1
+            INNER JOIN (
+                SELECT
+                    master_no,
+                    house_no,
+                    MAX(id) as max_id
+                FROM
+                    daily_outbound
+                WHERE
+                    master_no IS NOT NULL AND master_no != '' AND
+                    house_no IS NOT NULL AND house_no != ''
+                GROUP BY
+                    master_no, house_no
+                HAVING
+                    COUNT(*) > 1
+            ) t2 ON t1.master_no = t2.master_no
+            AND t1.house_no = t2.house_no
+            AND t1.id < t2.max_id;
+            ";
+
+            if ($conn_cleanup->query($sql_delete) === TRUE) {
+                write_log("步驟 2/2 成功: " . $conn_cleanup->affected_rows . " 筆舊的重複資料已刪除。");
+            } else {
+                throw new Exception("步驟 2/2 失敗: " . $conn_cleanup->error);
+            }
+
+            write_log("資料清理程序成功執行完畢。");
+
+        } catch (Exception $e) {
+            write_log("嚴重錯誤：在執行資料清理程序時發生例外: " . $e->getMessage());
+        } finally {
+            if (isset($conn_cleanup) && $conn_cleanup->ping()) {
+                $conn_cleanup->close();
+            }
+        }
+    }
+
+
 } catch (Exception $e) {
     write_log("致命錯誤: 腳本執行中斷: " . $e->getMessage());
 }
