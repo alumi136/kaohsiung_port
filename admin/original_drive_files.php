@@ -1,10 +1,11 @@
 <?php
 // ☆☆☆☆ 這是一個 CLI (命令列介面) 腳本 ☆☆☆☆
-// 任務：
-// 1. 從 Google Drive 下載多種格式的 Excel 檔案，分析後寫入 daily_outbound 資料表。
-// 2. 在所有檔案處理完畢後，執行兩步驟的資料清理程序，確保資料的唯一性與完整性。
+// 任務 (完整 ETL 流程):
+// 1. (Extract) 從 Google Drive 下載 Excel 檔案，寫入 daily_outbound。
+// 2. (Transform) 清理 daily_outbound 中的重複資料，確保其唯一性與完整性。
+// 3. (Load) 將清理後的 daily_outbound 資料彙總統計，更新至 daily_arrange 總表。
 
-set_time_limit(7200); // 增加腳本最大執行時間至 2 小時 (包含清理時間)
+set_time_limit(7200); // 增加腳本最大執行時間至 2 小時
 ini_set('memory_limit', '512M');
 
 // 設定腳本的預設時區為台北時間
@@ -40,36 +41,20 @@ function write_log($message) {
     echo $formatted_message;
 }
 
+// ... 其他輔助函式庫 (無變動) ...
 function parse_spout_date_value($value) {
     if (empty($value)) return null;
-    if ($value instanceof \DateTime) {
-        return $value->format('Y-m-d H:i:s');
-    }
-    if (is_string($value)) {
-        try {
-            $dt = new DateTime($value);
-            return $dt->format('Y-m-d H:i:s');
-        } catch (Exception $e) { return null; }
-    }
+    if ($value instanceof \DateTime) { return $value->format('Y-m-d H:i:s'); }
+    if (is_string($value)) { try { $dt = new DateTime($value); return $dt->format('Y-m-d H:i:s'); } catch (Exception $e) { return null; } }
     return null;
 }
-
 function batch_insert(mysqli $conn, array $data): int {
     if (empty($data)) return 0;
-    $sql = "INSERT INTO " . TARGET_TABLE . " (
-        declaration_no, master_no, house_no, weight, total_packages, packages_in, packages_out, 
-        clearance_method, declaration_type, carrier_id, route, storage_in_datetime, 
-        storage_out_datetime, release_datetime, status, customer_name, remark, status0
-    ) VALUES ";
+    $sql = "INSERT INTO " . TARGET_TABLE . " (declaration_no, master_no, house_no, weight, total_packages, packages_in, packages_out, clearance_method, declaration_type, carrier_id, route, storage_in_datetime, storage_out_datetime, release_datetime, status, customer_name, remark, status0) VALUES ";
     $placeholders = []; $params = []; $types = '';
     foreach ($data as $row) {
         $placeholders[] = '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-        array_push($params, 
-            $row['declaration_no'], $row['master_no'], $row['house_no'], $row['weight'], $row['total_packages'], 
-            $row['packages_in'], $row['packages_out'], $row['clearance_method'], $row['declaration_type'], 
-            $row['carrier_id'], $row['route'], $row['storage_in_datetime'], $row['storage_out_datetime'], 
-            $row['release_datetime'], $row['status'], $row['customer_name'], $row['remark'], $row['status0']
-        );
+        array_push($params, $row['declaration_no'], $row['master_no'], $row['house_no'], $row['weight'], $row['total_packages'], $row['packages_in'], $row['packages_out'], $row['clearance_method'], $row['declaration_type'], $row['carrier_id'], $row['route'], $row['storage_in_datetime'], $row['storage_out_datetime'], $row['release_datetime'], $row['status'], $row['customer_name'], $row['remark'], $row['status0']);
         $types .= 'sssdiisssssssssssi';
     }
     $sql .= implode(', ', $placeholders);
@@ -81,7 +66,6 @@ function batch_insert(mysqli $conn, array $data): int {
     $stmt->close();
     return $affected_rows;
 }
-
 function getGoogleDriveClient(): Google_Service_Drive {
     $client = new Google_Client();
     $client->setApplicationName('Kaohsiung Port Drive Importer');
@@ -90,14 +74,11 @@ function getGoogleDriveClient(): Google_Service_Drive {
     $client->setAccessType('offline');
     return new Google_Service_Drive($client);
 }
-
 function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $sourceFolderId, string $destFolderId): void {
     $max_retries = 3;
     for ($attempt = 1; $attempt <= $max_retries; $attempt++) {
         try {
-            $service->files->update($fileId, new \Google\Service\Drive\DriveFile(), [
-                'addParents' => $destFolderId, 'removeParents' => $sourceFolderId, 'fields' => 'id, parents'
-            ]);
+            $service->files->update($fileId, new \Google\Service\Drive\DriveFile(), ['addParents' => $destFolderId, 'removeParents' => $sourceFolderId, 'fields' => 'id, parents']);
             sleep(1);
             $file = $service->files->get($fileId, ['fields' => 'parents']);
             if (in_array($destFolderId, $file->getParents())) return;
@@ -113,10 +94,11 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Original files cron job started (v32 - Integrated Cleanup). ====");
+write_log("==== Original files ETL cron job started (v33 - Full Process). ====");
 $files_were_processed = false;
 
 try {
+    // --- 步驟 1: (Extract) 從 Drive 讀取檔案並寫入 daily_outbound ---
     $driveService = getGoogleDriveClient();
     $queryParams = ['q' => "'" . SOURCE_FOLDER_ID . "' in parents and (mimeType='application/vnd.ms-excel' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed=false", 'pageSize' => 10, 'fields' => "files(id, name)"];
     $results = $driveService->files->listFiles($queryParams);
@@ -126,317 +108,139 @@ try {
     } else {
         $files_were_processed = true;
         foreach ($results->getFiles() as $file) {
+            // ... (此處檔案處理迴圈邏輯不變) ...
             $file_id = $file->getId();
             $file_name = $file->getName();
             write_log("正在處理檔案: {$file_name} (ID: {$file_id})");
-
             $response = $driveService->files->get($file_id, ['alt' => 'media']);
             $file_content = $response->getBody()->getContents();
-
             $file_extension = pathinfo($file_name, PATHINFO_EXTENSION);
             $file_tmp_path = sys_get_temp_dir() . '/' . uniqid('drive_import_', true) . '.' . $file_extension;
             file_put_contents($file_tmp_path, $file_content);
-            write_log("檔案已下載至臨時路徑: {$file_tmp_path}");
-
-            $total_inserted_rows = 0;
             $conn = new mysqli($db_config['servername'], $db_config['username'], $db_config['password'], $db_config['dbname']);
             if ($conn->connect_error) throw new Exception("資料庫連線失敗: " . $conn->connect_error);
             $conn->set_charset("utf8mb4");
-
             $transaction_started = false;
             try {
                 $reader = ReaderEntityFactory::createReaderFromFile($file_tmp_path);
                 $reader->open($file_tmp_path);
-                
-                $file_type = null;
-                $headerString = '';
-
-                foreach ($reader->getSheetIterator() as $sheet) {
-                    foreach ($sheet->getRowIterator() as $rowIndex => $row) {
-                        $headerRow = $row->toArray();
-                        $headerString = implode(',', array_map('trim', $headerRow));
-                        break;
-                    }
-                    break;
-                }
-                
-                if (strpos($headerString, '出倉時間') !== false && strpos($headerString, '申報重量') !== false) {
-                    $file_type = 'HANDOVER_LIST';
-                } elseif (strpos($headerString, '放行時間') !== false) {
-                    $file_type = 'RELEASED_NOT_OUT';
-                } elseif (strpos($headerString, '進倉時間') !== false) {
-                    $file_type = 'INSTOCK_NOT_OUT';
-                } elseif (strpos($headerString, '有無艙單') !== false) {
-                    $file_type = 'DECLARED_NOT_IN';
-                }
-
+                $file_type = null; $headerString = '';
+                foreach ($reader->getSheetIterator() as $sheet) { foreach ($sheet->getRowIterator() as $rowIndex => $row) { $headerRow = $row->toArray(); $headerString = implode(',', array_map('trim', $headerRow)); break; } break; }
+                if (strpos($headerString, '出倉時間') !== false && strpos($headerString, '申報重量') !== false) { $file_type = 'HANDOVER_LIST'; } elseif (strpos($headerString, '放行時間') !== false) { $file_type = 'RELEASED_NOT_OUT'; } elseif (strpos($headerString, '進倉時間') !== false) { $file_type = 'INSTOCK_NOT_OUT'; } elseif (strpos($headerString, '有無艙單') !== false) { $file_type = 'DECLARED_NOT_IN'; }
                 if (!$file_type) throw new Exception("無法從第一行的欄位標頭識別檔案類型。 Header: " . $headerString);
-                
                 write_log("檔案類型識別為: {$file_type}");
                 $reader->close();
-
                 $conn->begin_transaction();
                 $transaction_started = true;
-                
                 $reader->open($file_tmp_path);
-                $data_to_insert_chunk = [];
-                $chunk_size = 2000;
-                
+                $data_to_insert_chunk = []; $chunk_size = 2000; $total_inserted_rows = 0;
                 foreach ($reader->getSheetIterator() as $sheet) {
                     foreach ($sheet->getRowIterator() as $rowIndex => $row) {
                         if ($rowIndex === 1) continue;
-                        
                         $rowDataArray = $row->toArray();
-                        
-                        $key_identifier_cell = '';
-                        if($file_type === 'HANDOVER_LIST'){
-                            $key_identifier_cell = trim($rowDataArray[4] ?? ''); // E
-                        } else {
-                            $key_identifier_cell = trim($rowDataArray[2] ?? ''); // C
-                        }
-
-                        if (!empty($key_identifier_cell) && preg_match('/^[A-Za-z0-9]/', $key_identifier_cell) === 0) {
-                            write_log("在第 {$rowIndex} 行偵測到非英數開頭的識別碼 '{$key_identifier_cell}'，判斷為檔案結尾，停止讀取此檔案。");
-                            break;
-                        }
-
+                        $key_identifier_cell = ($file_type === 'HANDOVER_LIST') ? trim($rowDataArray[4] ?? '') : trim($rowDataArray[2] ?? '');
+                        if (!empty($key_identifier_cell) && preg_match('/^[A-Za-z0-9]/', $key_identifier_cell) === 0) { write_log("在第 {$rowIndex} 行偵測到非英數開頭的識別碼 '{$key_identifier_cell}'，判斷為檔案結尾，停止讀取此檔案。"); break; }
                         if (empty($key_identifier_cell)) continue;
-                        
-                        $row_data = [
-                            'declaration_no' => null, 'master_no' => null, 'house_no' => null, 'weight' => null, 
-                            'total_packages' => null, 'packages_in' => null, 'packages_out' => null, 
-                            'clearance_method' => null, 'declaration_type' => null, 'carrier_id' => null, 
-                            'route' => null, 'storage_in_datetime' => null, 'storage_out_datetime' => null, 
-                            'release_datetime' => null, 'status' => null, 'customer_name' => null,
-                            'remark' => null, 'status0' => 0
-                        ];
-
+                        $row_data = ['declaration_no' => null, 'master_no' => null, 'house_no' => null, 'weight' => null, 'total_packages' => null, 'packages_in' => null, 'packages_out' => null, 'clearance_method' => null, 'declaration_type' => null, 'carrier_id' => null, 'route' => null, 'storage_in_datetime' => null, 'storage_out_datetime' => null, 'release_datetime' => null, 'status' => null, 'customer_name' => null, 'remark' => null, 'status0' => 0];
                         $temp_total = 0; $temp_in = 0; $temp_out = 0;
-
                         switch ($file_type) {
-                            case 'HANDOVER_LIST':
-                                $row_data['master_no'] = $rowDataArray[3] ?? null;
-                                $row_data['house_no'] = $key_identifier_cell;
-                                $row_data['declaration_no'] = $rowDataArray[1] ?? null;
-                                $row_data['declaration_type'] = $rowDataArray[2] ?? null;
-                                $temp_total = (int)($rowDataArray[7] ?? 0);
-                                $temp_in = (int)($rowDataArray[8] ?? 0);
-                                $temp_out = (int)($rowDataArray[9] ?? 0);
-                                $row_data['total_packages'] = $temp_total;
-                                $row_data['packages_in'] = $temp_in;
-                                $row_data['packages_out'] = $temp_out;
-                                $row_data['weight'] = (float)($rowDataArray[10] ?? 0);
-                                $row_data['remark'] = $rowDataArray[12] ?? null;
-                                
-                                if ($temp_total === $temp_in && $temp_in === $temp_out && $temp_total > 0) {
-                                    $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[0] ?? null);
-                                }
-                                break;
-                            
-                            case 'DECLARED_NOT_IN':
-                                $row_data['master_no'] = $rowDataArray[1];
-                                $row_data['house_no'] = $key_identifier_cell;
-                                $row_data['declaration_no'] = $rowDataArray[4];
-                                $row_data['declaration_type'] = $rowDataArray[5];
-                                $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0);
-                                $row_data['packages_in'] = (int)($rowDataArray[7] ?? 0);
-                                $row_data['packages_out'] = (int)($rowDataArray[8] ?? 0);
-                                $remark_value = trim($rowDataArray[12] ?? '');
-                                $row_data['remark'] = $remark_value;
-                                if (strpos($remark_value, 'SZ') !== false) $row_data['status0'] = 5;
-                                break;
-
-                            case 'INSTOCK_NOT_OUT':
-                                $row_data['master_no'] = $rowDataArray[1];
-                                $row_data['house_no'] = $key_identifier_cell;
-                                $raw_declaration = $rowDataArray[4] ?? '';
-                                $row_data['declaration_no'] = substr($raw_declaration, 0, 14);
-                                $row_data['declaration_type'] = $rowDataArray[5];
-                                $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0);
-                                $row_data['packages_in'] = (int)($rowDataArray[7] ?? 0);
-                                $row_data['packages_out'] = (int)($rowDataArray[8] ?? 0);
-                                $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[9] ?? null);
-                                break;
-
-                            case 'RELEASED_NOT_OUT':
-                                $row_data['master_no'] = $rowDataArray[1];
-                                $row_data['house_no'] = $key_identifier_cell;
-                                $row_data['declaration_no'] = $rowDataArray[3];
-                                $row_data['declaration_type'] = $rowDataArray[4];
-                                $temp_total = (int)($rowDataArray[7] ?? 0);
-                                $temp_in = (int)($rowDataArray[8] ?? 0);
-                                $temp_out = (int)($rowDataArray[9] ?? 0);
-                                $row_data['total_packages'] = $temp_total;
-                                $row_data['packages_in'] = $temp_in;
-                                $row_data['packages_out'] = $temp_out;
-                                $row_data['release_datetime'] = parse_spout_date_value($rowDataArray[10] ?? null);
-                                $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[11] ?? null);
-                                $row_data['clearance_method'] = $rowDataArray[13] ?? null;
-
-                                if ($temp_total === $temp_in && $temp_in === $temp_out && $temp_total > 0) {
-                                    $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[12] ?? null);
-                                }
-                                break;
+                            case 'HANDOVER_LIST': $row_data['master_no'] = $rowDataArray[3] ?? null; $row_data['house_no'] = $key_identifier_cell; $row_data['declaration_no'] = $rowDataArray[1] ?? null; $row_data['declaration_type'] = $rowDataArray[2] ?? null; $temp_total = (int)($rowDataArray[7] ?? 0); $temp_in = (int)($rowDataArray[8] ?? 0); $temp_out = (int)($rowDataArray[9] ?? 0); $row_data['total_packages'] = $temp_total; $row_data['packages_in'] = $temp_in; $row_data['packages_out'] = $temp_out; $row_data['weight'] = (float)($rowDataArray[10] ?? 0); $row_data['remark'] = $rowDataArray[12] ?? null; if ($temp_total === $temp_in && $temp_in === $temp_out && $temp_total > 0) { $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[0] ?? null); } break;
+                            case 'DECLARED_NOT_IN': $row_data['master_no'] = $rowDataArray[1]; $row_data['house_no'] = $key_identifier_cell; $row_data['declaration_no'] = $rowDataArray[4]; $row_data['declaration_type'] = $rowDataArray[5]; $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0); $row_data['packages_in'] = (int)($rowDataArray[7] ?? 0); $row_data['packages_out'] = (int)($rowDataArray[8] ?? 0); $remark_value = trim($rowDataArray[12] ?? ''); $row_data['remark'] = $remark_value; if (strpos($remark_value, 'SZ') !== false) $row_data['status0'] = 5; break;
+                            case 'INSTOCK_NOT_OUT': $row_data['master_no'] = $rowDataArray[1]; $row_data['house_no'] = $key_identifier_cell; $raw_declaration = $rowDataArray[4] ?? ''; $row_data['declaration_no'] = substr($raw_declaration, 0, 14); $row_data['declaration_type'] = $rowDataArray[5]; $row_data['total_packages'] = (int)($rowDataArray[6] ?? 0); $row_data['packages_in'] = (int)($rowDataArray[7] ?? 0); $row_data['packages_out'] = (int)($rowDataArray[8] ?? 0); $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[9] ?? null); break;
+                            case 'RELEASED_NOT_OUT': $row_data['master_no'] = $rowDataArray[1]; $row_data['house_no'] = $key_identifier_cell; $row_data['declaration_no'] = $rowDataArray[3]; $row_data['declaration_type'] = $rowDataArray[4]; $temp_total = (int)($rowDataArray[7] ?? 0); $temp_in = (int)($rowDataArray[8] ?? 0); $temp_out = (int)($rowDataArray[9] ?? 0); $row_data['total_packages'] = $temp_total; $row_data['packages_in'] = $temp_in; $row_data['packages_out'] = $temp_out; $row_data['release_datetime'] = parse_spout_date_value($rowDataArray[10] ?? null); $row_data['storage_in_datetime'] = parse_spout_date_value($rowDataArray[11] ?? null); $row_data['clearance_method'] = $rowDataArray[13] ?? null; if ($temp_total === $temp_in && $temp_in === $temp_out && $temp_total > 0) { $row_data['storage_out_datetime'] = parse_spout_date_value($rowDataArray[12] ?? null); } break;
                         }
                         $data_to_insert_chunk[] = $row_data;
-
-                        if (count($data_to_insert_chunk) >= $chunk_size) {
-                            $inserted_in_chunk = batch_insert($conn, $data_to_insert_chunk);
-                            $total_inserted_rows += $inserted_in_chunk;
-                            write_log("已寫入 " . count($data_to_insert_chunk) . " 筆資料 (累計: {$total_inserted_rows})...");
-                            $data_to_insert_chunk = [];
-                        }
+                        if (count($data_to_insert_chunk) >= $chunk_size) { $inserted_in_chunk = batch_insert($conn, $data_to_insert_chunk); $total_inserted_rows += $inserted_in_chunk; write_log("已寫入 " . count($data_to_insert_chunk) . " 筆資料 (累計: {$total_inserted_rows})..."); $data_to_insert_chunk = []; }
                     }
                 }
-                
-                if (!empty($data_to_insert_chunk)) {
-                    $inserted_in_chunk = batch_insert($conn, $data_to_insert_chunk);
-                    $total_inserted_rows += $inserted_in_chunk;
-                    write_log("準備寫入最後 " . count($data_to_insert_chunk) . " 筆剩餘資料...");
-                }
-                
+                if (!empty($data_to_insert_chunk)) { $inserted_in_chunk = batch_insert($conn, $data_to_insert_chunk); $total_inserted_rows += $inserted_in_chunk; write_log("準備寫入最後 " . count($data_to_insert_chunk) . " 筆剩餘資料..."); }
                 $reader->close();
-
                 $conn->commit();
                 write_log("成功: 檔案 '{$file_name}' 處理完畢。共新增 {$total_inserted_rows} 筆資料。");
-                
                 write_log("正在將 '{$file_name}' 移動至 'daily_out' 資料夾...");
                 moveFileOnDrive($driveService, $file_id, SOURCE_FOLDER_ID, DESTINATION_FOLDER_ID);
                 write_log("檔案移動成功。");
-
             } catch (Exception $e) {
                 if ($transaction_started) $conn->rollback();
                 write_log("嚴重錯誤: 處理檔案 '{$file_name}' 時發生例外: " . $e->getMessage());
             } finally {
-                if (isset($conn) && $conn->ping()) {
-                    $conn->close();
-                }
+                if (isset($conn) && $conn->ping()) { $conn->close(); }
                 unlink($file_tmp_path);
             }
         }
     }
 
-    // --- 【新增邏輯】在所有檔案處理完畢後，執行資料清理程序 ---
+    // --- 步驟 2 & 3: (Transform & Load) 在所有檔案處理完畢後，執行資料清理與彙總程序 ---
     if ($files_were_processed) {
-        write_log("所有檔案匯入完成，準備開始執行資料清理程序...");
+        write_log("所有檔案匯入完成，準備開始執行資料後處理程序...");
 
-        // 重新建立資料庫連線
         $conn_cleanup = new mysqli($db_config['servername'], $db_config['username'], $db_config['password'], $db_config['dbname']);
-        if ($conn_cleanup->connect_error) {
-            throw new Exception("清理程序：資料庫連線失敗: " . $conn_cleanup->connect_error);
-        }
+        if ($conn_cleanup->connect_error) { throw new Exception("後處理程序：資料庫連線失敗: " . $conn_cleanup->connect_error); }
         $conn_cleanup->set_charset("utf8mb4");
 
         try {
-            // --- 等待一分鐘 ---
+            // --- Transform Part 1: 合併重複資料 ---
             write_log("等待 60 秒，確保資料庫同步...");
             sleep(60);
+            write_log("步驟 1/3: 正在合併重複資料，創建黃金紀錄...");
+            $sql_update_golden = "UPDATE daily_outbound AS t_to_update JOIN (SELECT t_max_id.max_id, COALESCE(t_newest.declaration_no, MAX(t_all.declaration_no)) AS final_declaration_no, COALESCE(t_newest.master_no, MAX(t_all.master_no)) AS final_master_no, COALESCE(t_newest.house_no, MAX(t_all.house_no)) AS final_house_no, COALESCE(t_newest.weight, MAX(t_all.weight)) AS final_weight, COALESCE(t_newest.total_packages, MAX(t_all.total_packages)) AS final_total_packages, COALESCE(t_newest.packages_in, MAX(t_all.packages_in)) AS final_packages_in, COALESCE(t_newest.packages_out, MAX(t_all.packages_out)) AS final_packages_out, COALESCE(t_newest.clearance_method, MAX(t_all.clearance_method)) AS final_clearance_method, COALESCE(t_newest.declaration_type, MAX(t_all.declaration_type)) AS final_declaration_type, COALESCE(t_newest.carrier_id, MAX(t_all.carrier_id)) AS final_carrier_id, COALESCE(t_newest.route, MAX(t_all.route)) AS final_route, COALESCE(t_newest.customer_name, MAX(t_all.customer_name)) AS final_customer_name, COALESCE(t_newest.remark, MAX(t_all.remark)) AS final_remark, COALESCE(t_newest.status0, MAX(t_all.status0)) AS final_status0, MAX(t_all.storage_in_datetime) AS final_storage_in_datetime, MAX(t_all.release_datetime) AS final_release_datetime, MAX(t_all.storage_out_datetime) AS unconditional_storage_out_datetime FROM (SELECT master_no, house_no, MAX(id) as max_id FROM daily_outbound GROUP BY master_no, house_no HAVING COUNT(*) > 1) AS t_max_id JOIN daily_outbound AS t_all ON t_all.master_no = t_max_id.master_no AND t_all.house_no = t_max_id.house_no JOIN daily_outbound AS t_newest ON t_newest.id = t_max_id.max_id GROUP BY t_max_id.master_no, t_max_id.house_no, t_max_id.max_id ) AS t_source ON t_to_update.id = t_source.max_id SET t_to_update.declaration_no = t_source.final_declaration_no, t_to_update.master_no = t_source.final_master_no, t_to_update.house_no = t_source.final_house_no, t_to_update.weight = t_source.final_weight, t_to_update.total_packages = t_source.final_total_packages, t_to_update.packages_in = t_source.final_packages_in, t_to_update.packages_out = t_source.final_packages_out, t_to_update.clearance_method = t_source.final_clearance_method, t_to_update.declaration_type = t_source.final_declaration_type, t_to_update.carrier_id = t_source.final_carrier_id, t_to_update.route = t_source.final_route, t_to_update.customer_name = t_source.final_customer_name, t_to_update.remark = t_source.final_remark, t_to_update.status0 = t_source.final_status0, t_to_update.storage_in_datetime = t_source.final_storage_in_datetime, t_to_update.release_datetime = t_source.final_release_datetime, t_to_update.storage_out_datetime = CASE WHEN t_source.final_total_packages = t_source.final_packages_in AND t_source.final_total_packages = t_source.final_packages_out AND t_source.final_total_packages > 0 THEN t_source.unconditional_storage_out_datetime ELSE NULL END";
+            if ($conn_cleanup->query($sql_update_golden) === TRUE) { write_log("步驟 1/3 成功: " . $conn_cleanup->affected_rows . " 筆黃金紀錄已更新。"); } else { throw new Exception("步驟 1/3 失敗: " . $conn_cleanup->error); }
 
-            // --- 第一步：全面性的資訊合併更新 ---
-            write_log("步驟 1/2: 正在合併重複資料，創建黃金紀錄...");
-            $sql_update = "
-            UPDATE
-                daily_outbound AS t_to_update
-            JOIN
-                (
-                    SELECT
-                        t_max_id.max_id,
-                        COALESCE(t_newest.declaration_no, MAX(t_all.declaration_no)) AS final_declaration_no,
-                        COALESCE(t_newest.master_no, MAX(t_all.master_no)) AS final_master_no,
-                        COALESCE(t_newest.house_no, MAX(t_all.house_no)) AS final_house_no,
-                        COALESCE(t_newest.weight, MAX(t_all.weight)) AS final_weight,
-                        COALESCE(t_newest.total_packages, MAX(t_all.total_packages)) AS final_total_packages,
-                        COALESCE(t_newest.packages_in, MAX(t_all.packages_in)) AS final_packages_in,
-                        COALESCE(t_newest.packages_out, MAX(t_all.packages_out)) AS final_packages_out,
-                        COALESCE(t_newest.clearance_method, MAX(t_all.clearance_method)) AS final_clearance_method,
-                        COALESCE(t_newest.declaration_type, MAX(t_all.declaration_type)) AS final_declaration_type,
-                        COALESCE(t_newest.carrier_id, MAX(t_all.carrier_id)) AS final_carrier_id,
-                        COALESCE(t_newest.route, MAX(t_all.route)) AS final_route,
-                        COALESCE(t_newest.customer_name, MAX(t_all.customer_name)) AS final_customer_name,
-                        COALESCE(t_newest.remark, MAX(t_all.remark)) AS final_remark,
-                        COALESCE(t_newest.status0, MAX(t_all.status0)) AS final_status0,
-                        MAX(t_all.storage_in_datetime) AS final_storage_in_datetime,
-                        MAX(t_all.release_datetime) AS final_release_datetime,
-                        MAX(t_all.storage_out_datetime) AS unconditional_storage_out_datetime
-                    FROM
-                        (SELECT master_no, house_no, MAX(id) as max_id
-                         FROM daily_outbound
-                         GROUP BY master_no, house_no
-                         HAVING COUNT(*) > 1) AS t_max_id
-                    JOIN daily_outbound AS t_all ON t_all.master_no = t_max_id.master_no AND t_all.house_no = t_max_id.house_no
-                    JOIN daily_outbound AS t_newest ON t_newest.id = t_max_id.max_id
-                    GROUP BY
-                        t_max_id.master_no, t_max_id.house_no, t_max_id.max_id
-                ) AS t_source
-            ON
-                t_to_update.id = t_source.max_id
-            SET
-                t_to_update.declaration_no = t_source.final_declaration_no,
-                t_to_update.master_no = t_source.final_master_no,
-                t_to_update.house_no = t_source.final_house_no,
-                t_to_update.weight = t_source.final_weight,
-                t_to_update.total_packages = t_source.final_total_packages,
-                t_to_update.packages_in = t_source.final_packages_in,
-                t_to_update.packages_out = t_source.final_packages_out,
-                t_to_update.clearance_method = t_source.final_clearance_method,
-                t_to_update.declaration_type = t_source.final_declaration_type,
-                t_to_update.carrier_id = t_source.final_carrier_id,
-                t_to_update.route = t_source.final_route,
-                t_to_update.customer_name = t_source.final_customer_name,
-                t_to_update.remark = t_source.final_remark,
-                t_to_update.status0 = t_source.final_status0,
-                t_to_update.storage_in_datetime = t_source.final_storage_in_datetime,
-                t_to_update.release_datetime = t_source.final_release_datetime,
-                t_to_update.storage_out_datetime = CASE
-                    WHEN t_source.final_total_packages = t_source.final_packages_in AND t_source.final_total_packages = t_source.final_packages_out AND t_source.final_total_packages > 0
-                    THEN t_source.unconditional_storage_out_datetime
-                    ELSE NULL
-                END;
-            ";
-            
-            if ($conn_cleanup->query($sql_update) === TRUE) {
-                write_log("步驟 1/2 成功: " . $conn_cleanup->affected_rows . " 筆黃金紀錄已更新。");
-            } else {
-                throw new Exception("步驟 1/2 失敗: " . $conn_cleanup->error);
-            }
-
-            // --- 等待一分鐘 ---
+            // --- Transform Part 2: 刪除舊的重複資料 ---
             write_log("等待 60 秒，確保更新操作完成...");
             sleep(60);
+            write_log("步驟 2/3: 正在刪除舊的重複資料...");
+            $sql_delete_duplicates = "DELETE t1 FROM daily_outbound t1 INNER JOIN (SELECT master_no, house_no, MAX(id) as max_id FROM daily_outbound WHERE master_no IS NOT NULL AND master_no != '' AND house_no IS NOT NULL AND house_no != '' GROUP BY master_no, house_no HAVING COUNT(*) > 1) t2 ON t1.master_no = t2.master_no AND t1.house_no = t2.house_no AND t1.id < t2.max_id";
+            if ($conn_cleanup->query($sql_delete_duplicates) === TRUE) { write_log("步驟 2/3 成功: " . $conn_cleanup->affected_rows . " 筆舊的重複資料已刪除。"); } else { throw new Exception("步驟 2/3 失敗: " . $conn_cleanup->error); }
 
-            // --- 第二步：安全刪除舊的重複紀錄 ---
-            write_log("步驟 2/2: 正在刪除舊的重複資料...");
-            $sql_delete = "
-            DELETE t1 FROM daily_outbound t1
-            INNER JOIN (
-                SELECT
+            // --- 【最新修改】步驟 3/3: (Load) 更新 daily_arrange 總表 ---
+            write_log("等待 60 秒，準備更新排櫃總表...");
+            sleep(60);
+            write_log("步驟 3/3: 正在從 daily_outbound 彙總資料並更新至 daily_arrange...");
+            $sql_update_arrange = "
+            UPDATE
+                daily_arrange AS da
+            JOIN
+                (SELECT
                     master_no,
-                    house_no,
-                    MAX(id) as max_id
+                    SUM(IF(storage_out_datetime IS NOT NULL, packages_out, 0)) AS calculated_inandout,
+                    SUM(IF(storage_in_datetime IS NOT NULL AND storage_out_datetime IS NULL, packages_in, 0)) AS calculated_innoout,
+                    SUM(IF(storage_in_datetime IS NULL AND storage_out_datetime IS NULL, total_packages, 0)) AS calculated_noin,
+                    MAX(release_datetime) AS calculated_release_datetime
                 FROM
                     daily_outbound
                 WHERE
-                    master_no IS NOT NULL AND master_no != '' AND
-                    house_no IS NOT NULL AND house_no != ''
+                    master_no IS NOT NULL AND master_no != ''
                 GROUP BY
-                    master_no, house_no
-                HAVING
-                    COUNT(*) > 1
-            ) t2 ON t1.master_no = t2.master_no
-            AND t1.house_no = t2.house_no
-            AND t1.id < t2.max_id;
-            ";
-
-            if ($conn_cleanup->query($sql_delete) === TRUE) {
-                write_log("步驟 2/2 成功: " . $conn_cleanup->affected_rows . " 筆舊的重複資料已刪除。");
+                    master_no
+                ) AS stats ON da.bl_number = stats.master_no
+            SET
+                da.inandout = stats.calculated_inandout,
+                da.innoout = stats.calculated_innoout,
+                da.noin = stats.calculated_noin,
+                da.nodeclare = da.quantity - stats.calculated_inandout - stats.calculated_innoout - stats.calculated_noin,
+                da.status = CASE
+                    WHEN stats.calculated_inandout >= da.quantity AND da.quantity > 0 THEN 1
+                    ELSE da.status
+                END,
+                da.scale = CASE
+                    WHEN da.quantity > 0 THEN
+                        ROUND(((stats.calculated_inandout + stats.calculated_innoout + stats.calculated_noin) / da.quantity) * 100, 1)
+                    ELSE
+                        0.0
+                END,
+                da.release_datetime = stats.calculated_release_datetime";
+            
+            if ($conn_cleanup->query($sql_update_arrange) === TRUE) {
+                write_log("步驟 3/3 成功: " . $conn_cleanup->affected_rows . " 筆排櫃總表紀錄已更新。");
             } else {
-                throw new Exception("步驟 2/2 失敗: " . $conn_cleanup->error);
+                throw new Exception("步驟 3/3 失敗: " . $conn_cleanup->error);
             }
 
-            write_log("資料清理程序成功執行完畢。");
+            write_log("資料後處理程序成功執行完畢。");
 
         } catch (Exception $e) {
-            write_log("嚴重錯誤：在執行資料清理程序時發生例外: " . $e->getMessage());
+            write_log("嚴重錯誤：在執行資料後處理程序時發生例外: " . $e->getMessage());
         } finally {
             if (isset($conn_cleanup) && $conn_cleanup->ping()) {
                 $conn_cleanup->close();
@@ -444,10 +248,10 @@ try {
         }
     }
 
-
 } catch (Exception $e) {
     write_log("致命錯誤: 腳本執行中斷: " . $e->getMessage());
 }
 
-write_log("==== Original files cron job finished. ====\n");
+write_log("==== Original files ETL cron job finished. ====\n");
 ?>
+
