@@ -11,7 +11,7 @@ ini_set('memory_limit', '512M');
 // 設定腳本的預設時區為台北時間
 date_default_timezone_set('Asia/Taipei');
 
-require __DIR__ . '/excel/vendor/autoload.php';
+require __DIR__ . '/vendor/autoload.php';
 
 use Google\Client as Google_Client;
 use Google\Service\Drive as Google_Service_Drive;

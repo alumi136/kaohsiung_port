@@ -41,7 +41,7 @@ HTML;
     
     flush();
 
-    $command = 'php ' . __DIR__ . '/original_drive_files.php 2>&1';
+    $command = 'php ' '/var/www/google-drive-importer/original_drive_files.php 2>&1';
     passthru($command, $return_code);
     
     echo "\n========================================\n";
