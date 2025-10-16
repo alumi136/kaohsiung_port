@@ -255,7 +255,12 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 <body class="bg-gray-100 p-6">
 <div class="container mx-auto bg-white p-8 rounded-lg shadow-lg">
 
-    <h1 class="text-3xl font-bold mb-6 text-gray-800">排櫃總表操作</h1>
+    <!-- 【最新修正】將標題和更新按鈕放在同一行 -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold text-gray-800">排櫃總表操作</h1>
+        <!-- 【最新修正】移動按鈕到此處，並修改樣式為藍色底 -->
+        <button type="button" id="run-update-btn" onclick="runUpdateScript()" class="btn-primary">更新原始資料</button>
+    </div>
 
     <?php if ($message): ?><div class="mb-4 p-4 bg-green-100 text-green-700 rounded-lg"><?php echo $message; ?></div><?php endif; ?>
     <?php if ($error): ?><div class="mb-4 p-4 bg-red-100 text-red-700 rounded-lg"><?php echo $error; ?></div><?php endif; ?>
@@ -286,7 +291,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
             </div>
             <div class="flex flex-col space-y-2 md:flex-row md:space-y-0 md:space-x-2">
                  <button type="submit" name="search" value="1" class="btn-primary w-full">查詢</button>
-                 <button type="button" id="run-update-btn" onclick="runUpdateScript()" class="btn-danger w-full">更新原始資料</button>
+                 <!-- 【最新修正】此處的紅色按鈕已被移除 -->
                  <button type="button" onclick="openModal('addModal')" class="btn-secondary w-full">新增</button>
                  <button type="button" onclick="openModal('importModal')" class="btn-secondary w-full">匯入</button>
                  <a href="?<?php echo http_build_query(array_merge($_GET, ['download_csv' => 1])); ?>" class="btn-success w-full text-center">下載查詢結果</a>
