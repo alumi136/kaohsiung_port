@@ -94,7 +94,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Original files ETL cron job started (v34 - 5min Delay). ====");
+write_log("==== Original files ETL cron job started (v35 - Status Logic Update). ====");
 $files_were_processed = false;
 
 try {
@@ -180,15 +180,13 @@ try {
 
         try {
             // --- Transform Part 1: 合併重複資料 ---
-            // 【最新修改】等待時間增加到 5 分鐘
             write_log("等待 300 秒 (5分鐘)，確保資料庫同步...");
             sleep(300);
             write_log("步驟 1/3: 正在合併重複資料，創建黃金紀錄...");
-            $sql_update_golden = "UPDATE daily_outbound AS t_to_update JOIN (SELECT t_max_id.max_id, COALESCE(t_newest.declaration_no, MAX(t_all.declaration_no)) AS final_declaration_no, COALESCE(t_newest.master_no, MAX(t_all.master_no)) AS final_master_no, COALESCE(t_newest.house_no, MAX(t_all.house_no)) AS final_house_no, COALESCE(t_newest.weight, MAX(t_all.weight)) AS final_weight, COALESCE(t_newest.total_packages, MAX(t_all.total_packages)) AS final_total_packages, COALESCE(t_newest.packages_in, MAX(t_all.packages_in)) AS final_packages_in, COALESCE(t_newest.packages_out, MAX(t_all.packages_out)) AS final_packages_out, COALESCE(t_newest.clearance_method, MAX(t_all.clearance_method)) AS final_clearance_method, COALESCE(t_newest.declaration_type, MAX(t_all.declaration_type)) AS final_declaration_type, COALESCE(t_newest.carrier_id, MAX(t_all.carrier_id)) AS final_carrier_id, COALESCE(t_newest.route, MAX(t_all.route)) AS final_route, COALESCE(t_newest.customer_name, MAX(t_all.customer_name)) AS final_customer_name, COALESCE(t_newest.remark, MAX(t_all.remark)) AS final_remark, COALESCE(t_newest.status0, MAX(t_all.status0)) AS final_status0, MAX(t_all.storage_in_datetime) AS final_storage_in_datetime, MAX(t_all.release_datetime) AS final_release_datetime, MAX(t_all.storage_out_datetime) AS unconditional_storage_out_datetime FROM (SELECT master_no, house_no, MAX(id) as max_id FROM daily_outbound GROUP BY master_no, house_no HAVING COUNT(*) > 1) AS t_max_id JOIN daily_outbound AS t_all ON t_all.master_no = t_max_id.master_no AND t_all.house_no = t_max_id.house_no JOIN daily_outbound AS t_newest ON t_newest.id = t_max_id.max_id GROUP BY t_max_id.master_no, t_max_id.house_no, t_max_id.max_id ) AS t_source ON t_to_update.id = t_source.max_id SET t_to_update.declaration_no = t_source.final_declaration_no, t_to_update.master_no = t_source.final_master_no, t_to_update.house_no = t_source.final_house_no, t_to_update.weight = t_source.final_weight, t_to_update.total_packages = t_source.final_total_packages, t_to_update.packages_in = t_source.final_packages_in, t_to_update.packages_out = t_source.final_packages_out, t_to_update.clearance_method = t_source.final_clearance_method, t_to_update.declaration_type = t_source.final_declaration_type, t_to_update.carrier_id = t_source.final_carrier_id, t_to_update.route = t_source.final_route, t_to_update.customer_name = t_source.final_customer_name, t_to_update.remark = t_source.final_remark, t_to_update.status0 = t_source.final_status0, t_to_update.storage_in_datetime = t_source.final_storage_in_datetime, t_to_update.release_datetime = t_source.final_release_datetime, t_to_update.storage_out_datetime = CASE WHEN t_source.final_total_packages = t_source.final_packages_in AND t_source.final_total_packages = t_source.final_packages_out AND t_source.final_total_packages > 0 THEN t_source.unconditional_storage_out_datetime ELSE NULL END";
+            $sql_update_golden = "UPDATE daily_outbound AS t_to_update JOIN (SELECT t_max_id.max_id, COALESCE(t_newest.declaration_no, MAX(t_all.declaration_no)) AS final_declaration_no, COALESCE(t_newest.master_no, MAX(t_all.master_no)) AS final_master_no, COALESCE(t_newest.house_no, MAX(t_all.house_no)) AS final_house_no, COALESCE(t_newest.weight, MAX(t_all.weight)) AS final_weight, COALESCE(t_newest.total_packages, MAX(t_all.total_packages)) AS final_total_packages, COALESCE(t_newest.packages_in, MAX(t_all.packages_in)) AS final_packages_in, COALESCE(t_newest.packages_out, MAX(t_all.packages_out)) AS final_packages_out, COALESCE(t_newest.clearance_method, MAX(t_all.clearance_method)) AS final_clearance_method, COALESCE(t_newest.declaration_type, MAX(t_all.declaration_type)) AS final_declaration_type, COALESCE(t_newest.carrier_id, MAX(t_all.carrier_id)) AS final_carrier_id, COALESCE(t_newest.route, MAX(t_all.route)) AS final_route, COALESCE(t_newest.customer_name, MAX(t_all.customer_name)) AS final_customer_name, GROUP_CONCAT(DISTINCT CASE WHEN t_all.remark IS NOT NULL AND t_all.remark != '' THEN t_all.remark END SEPARATOR '; ') AS final_remark, COALESCE(t_newest.status0, MAX(t_all.status0)) AS final_status0, MAX(t_all.storage_in_datetime) AS final_storage_in_datetime, MAX(t_all.release_datetime) AS final_release_datetime, MAX(t_all.storage_out_datetime) AS unconditional_storage_out_datetime FROM (SELECT master_no, house_no, MAX(id) as max_id FROM daily_outbound GROUP BY master_no, house_no HAVING COUNT(*) > 1) AS t_max_id JOIN daily_outbound AS t_all ON t_all.master_no = t_max_id.master_no AND t_all.house_no = t_max_id.house_no JOIN daily_outbound AS t_newest ON t_newest.id = t_max_id.max_id GROUP BY t_max_id.master_no, t_max_id.house_no, t_max_id.max_id ) AS t_source ON t_to_update.id = t_source.max_id SET t_to_update.declaration_no = t_source.final_declaration_no, t_to_update.master_no = t_source.final_master_no, t_to_update.house_no = t_source.final_house_no, t_to_update.weight = t_source.final_weight, t_to_update.total_packages = t_source.final_total_packages, t_to_update.packages_in = t_source.final_packages_in, t_to_update.packages_out = t_source.final_packages_out, t_to_update.clearance_method = t_source.final_clearance_method, t_to_update.declaration_type = t_source.final_declaration_type, t_to_update.carrier_id = t_source.final_carrier_id, t_to_update.route = t_source.final_route, t_to_update.customer_name = t_source.final_customer_name, t_to_update.remark = t_source.final_remark, t_to_update.status0 = t_source.final_status0, t_to_update.storage_in_datetime = t_source.final_storage_in_datetime, t_to_update.release_datetime = t_source.final_release_datetime, t_to_update.storage_out_datetime = CASE WHEN t_source.final_total_packages = t_source.final_packages_in AND t_source.final_total_packages = t_source.final_packages_out AND t_source.final_total_packages > 0 THEN t_source.unconditional_storage_out_datetime ELSE NULL END";
             if ($conn_cleanup->query($sql_update_golden) === TRUE) { write_log("步驟 1/3 成功: " . $conn_cleanup->affected_rows . " 筆黃金紀錄已更新。"); } else { throw new Exception("步驟 1/3 失敗: " . $conn_cleanup->error); }
 
             // --- Transform Part 2: 刪除舊的重複資料 ---
-            // 【最新修改】等待時間增加到 5 分鐘
             write_log("等待 300 秒 (5分鐘)，確保更新操作完成...");
             sleep(300);
             write_log("步驟 2/3: 正在刪除舊的重複資料...");
@@ -196,7 +194,6 @@ try {
             if ($conn_cleanup->query($sql_delete_duplicates) === TRUE) { write_log("步驟 2/3 成功: " . $conn_cleanup->affected_rows . " 筆舊的重複資料已刪除。"); } else { throw new Exception("步驟 2/3 失敗: " . $conn_cleanup->error); }
 
             // --- 步驟 3/3: (Load) 更新 daily_arrange 總表 ---
-            // 【最新修改】等待時間增加到 5 分鐘
             write_log("等待 300 秒 (5分鐘)，準備更新排櫃總表...");
             sleep(300);
             write_log("步驟 3/3: 正在從 daily_outbound 彙總資料並更新至 daily_arrange...");
@@ -222,10 +219,13 @@ try {
                 da.innoout = stats.calculated_innoout,
                 da.noin = stats.calculated_noin,
                 da.nodeclare = da.quantity - stats.calculated_inandout - stats.calculated_innoout - stats.calculated_noin,
+                
+                -- 【最新修改】將 status 的更新邏輯修改為判斷 inandout 是否超過 300
                 da.status = CASE
-                    WHEN stats.calculated_inandout >= da.quantity AND da.quantity > 0 THEN 1
+                    WHEN stats.calculated_inandout > 300 THEN 1
                     ELSE da.status
                 END,
+
                 da.scale = CASE
                     WHEN da.quantity > 0 THEN
                         ROUND(((stats.calculated_inandout + stats.calculated_innoout + stats.calculated_noin) / da.quantity) * 100, 1)
