@@ -16,24 +16,30 @@ if (isset($_GET['logout'])) {
     exit();
 }
 
-// --- 跑馬燈資料計算 ---
-$marquee_text = '';
+// --- 統計資料計算 ---
+$innoout_text = '已進未出資訊載入失敗'; // 預設值
+$noin_text = '已申報未進倉資訊載入失敗'; // 預設值
+$seized_text = '查扣件數資訊載入失敗'; // 預設值
+
 try {
-    // 【最新修正】修改 SQL 邏輯，使用 BETWEEN 查詢特定區間，並排除無效日期
-    // 計算「已進未出」的累計總和
+    // 1. 計算「已進未出」的累計總和 (來自 daily_arrange)
     $stmt_innoout = $pdo->query("
         SELECT
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 4 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_5,
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_7,
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 13 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_14
         FROM daily_arrange
-        
+       
     ");
     $innoout_totals = $stmt_innoout->fetch(PDO::FETCH_ASSOC);
+    $innoout_text = sprintf(
+        "已進未出：近5日共 %d 件； 近7日共 %d 件； 近14日共 %d 件",
+        $innoout_totals['total_5'] ?? 0,
+        $innoout_totals['total_7'] ?? 0,
+        $innoout_totals['total_14'] ?? 0
+    );
 
-    // 【最新修正】修改 SQL 邏輯，使用 BETWEEN 查詢特定區間
-    // 【本次修改】移除排除無效日期的 WHERE 條件
-    // 計算「已申報未進倉」的累計總和
+    // 2. 計算「已申報未進倉」的累計總和 (來自 daily_arrange)
     $stmt_noin = $pdo->query("
         SELECT
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 4 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_5,
@@ -43,29 +49,41 @@ try {
         
     ");
     $noin_totals = $stmt_noin->fetch(PDO::FETCH_ASSOC);
-
-    // 組合跑馬燈文字
-    $innoout_text = sprintf(
-        "近5日已進未出共 %d 件； 近7日共 %d 件； 近14日共 %d 件", // 調整文字描述更精確
-        $innoout_totals['total_5'] ?? 0,
-        $innoout_totals['total_7'] ?? 0,
-        $innoout_totals['total_14'] ?? 0
-    );
-
     $noin_text = sprintf(
-        "近5日已申報未進倉共 %d 件； 近7日共 %d 件； 近14日共 %d 件", // 調整文字描述更精確
+        "已申報未進倉：近5日共 %d 件； 近7日共 %d 件； 近14日共 %d 件",
         $noin_totals['total_5'] ?? 0,
         $noin_totals['total_7'] ?? 0,
         $noin_totals['total_14'] ?? 0
     );
 
-    $marquee_text = $innoout_text . ' || ' . $noin_text; // 使用 || 分隔，更清晰
+    // 3. 【新增邏輯】計算「查扣」件數 (來自 daily_outbound, status0=5)
+    // 假設 created_at 是 DATETIME 或 TIMESTAMP
+    $stmt_seized = $pdo->query("
+        SELECT
+            SUM(CASE WHEN created_at BETWEEN (CURDATE() - INTERVAL 2 DAY) AND CURDATE() THEN 1 ELSE 0 END) AS total_3,
+            SUM(CASE WHEN created_at BETWEEN (CURDATE() - INTERVAL 4 DAY) AND CURDATE() THEN 1 ELSE 0 END) AS total_5,
+            SUM(CASE WHEN created_at BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN 1 ELSE 0 END) AS total_7
+        FROM daily_outbound
+        WHERE status0 = 5
+          AND created_at IS NOT NULL -- 確保 created_at 有效
+    ");
+    $seized_totals = $stmt_seized->fetch(PDO::FETCH_ASSOC);
+    $seized_text = sprintf(
+        "查扣件數：近3日共 %d 件； 近5日共 %d 件； 近7日共 %d 件",
+        $seized_totals['total_3'] ?? 0,
+        $seized_totals['total_5'] ?? 0,
+        $seized_totals['total_7'] ?? 0
+    );
 
 } catch (PDOException $e) {
-    // 【最新修改】顯示詳細的資料庫錯誤訊息，而不是通用訊息
-    $marquee_text = "警示資訊載入失敗！錯誤訊息：" . $e->getMessage();
-    // 記錄詳細錯誤到伺服器日誌，方便追蹤 (正式環境建議開啟)
-    // error_log("Marquee data query failed: " . $e->getMessage());
+    // 如果任何查詢失敗，保留預設的錯誤訊息，並可選擇記錄詳細錯誤
+     $error_message = "警示資訊載入失敗！錯誤訊息：" . $e->getMessage();
+     // 可以將 $error_message 顯示或記錄下來
+     error_log("Statistics query failed: " . $e->getMessage());
+     // 將所有文字設為錯誤提示
+     $innoout_text = $error_message;
+     $noin_text = ""; // 清空其他行，避免重複顯示錯誤
+     $seized_text = "";
 }
 ?>
 <!DOCTYPE html>
@@ -99,6 +117,17 @@ try {
             margin-right: 0.75rem;
             width: 1.25rem;
             height: 1.25rem;
+        }
+        /* 【新增樣式】靜態統計文字的樣式 */
+        .header-stats {
+            font-size: 0.875rem; /* text-sm */
+            line-height: 1.25rem;
+            color: #4b5563; /* gray-600 */
+            font-weight: 500; /* medium */
+        }
+        /* 可以為查扣增加特殊顏色 */
+        .seized-stats {
+             color: #dc2626; /* red-600 */
         }
     </style>
 </head>
@@ -139,11 +168,12 @@ try {
 
         <!-- Main Content -->
         <div class="flex-1 flex flex-col">
-            <header class="h-16 bg-white shadow-md flex items-center justify-between px-6">
-                <div class="flex-1 text-red-600 font-semibold overflow-hidden">
-                    <marquee behavior="scroll" direction="left" scrollamount="6">
-                        <?php echo htmlspecialchars($marquee_text); ?>
-                    </marquee>
+            <header class="h-auto md:h-16 bg-white shadow-md flex flex-col md:flex-row items-center justify-between px-6 py-2 md:py-0">
+                <!-- 【最新修改】移除跑馬燈，改為靜態顯示區塊 -->
+                <div class="header-stats flex-1 mb-2 md:mb-0 md:mr-4">
+                    <p><?php echo htmlspecialchars($innoout_text); ?></p>
+                    <p><?php echo htmlspecialchars($noin_text); ?></p>
+                    <p class="seized-stats font-bold"><?php echo htmlspecialchars($seized_text); ?></p>
                 </div>
                 <div class="flex items-center pl-4">
                     <span class="text-gray-700 mr-4">
