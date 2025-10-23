@@ -19,44 +19,46 @@ if (isset($_GET['logout'])) {
 // --- 跑馬燈資料計算 ---
 $marquee_text = '';
 try {
-    // 【*** 邏輯修正：移除 WHERE status = 0 條件 ***】
+    // 【最新修正】修改 SQL 邏輯，使用 BETWEEN 查詢特定區間，並排除無效日期
     // 計算「已進未出」的累計總和
     $stmt_innoout = $pdo->query("
         SELECT
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 5 DAY THEN innoout ELSE 0 END) AS total_5,
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 7 DAY THEN innoout ELSE 0 END) AS total_7,
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 14 DAY THEN innoout ELSE 0 END) AS total_14
+            SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 4 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_5,
+            SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_7,
+            SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 13 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_14
         FROM daily_arrange
+        WHERE arrival_date IS NOT NULL AND arrival_date > '0000-00-00' -- 排除無效日期
     ");
     $innoout_totals = $stmt_innoout->fetch(PDO::FETCH_ASSOC);
 
-    // 【*** 邏輯修正：移除 WHERE status = 0 條件 ***】
+    // 【最新修正】修改 SQL 邏輯，使用 BETWEEN 查詢特定區間，並排除無效日期
     // 計算「已申報未進倉」的累計總和
     $stmt_noin = $pdo->query("
         SELECT
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 5 DAY THEN noin ELSE 0 END) AS total_5,
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 7 DAY THEN noin ELSE 0 END) AS total_7,
-            SUM(CASE WHEN arrival_date <= CURDATE() - INTERVAL 14 DAY THEN noin ELSE 0 END) AS total_14
+            SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 4 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_5,
+            SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_7,
+            SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 13 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_14
         FROM daily_arrange
+        WHERE arrival_date IS NOT NULL AND arrival_date > '0000-00-00' -- 排除無效日期
     ");
     $noin_totals = $stmt_noin->fetch(PDO::FETCH_ASSOC);
 
     // 組合跑馬燈文字
     $innoout_text = sprintf(
-        "已進未出件數: 5日前共 %d 件, 7日前共 %d 件, 14日前共 %d 件",
+        "近5日已進未出共 %d 件； 近7日共 %d 件； 近14日共 %d 件", // 調整文字描述更精確
         $innoout_totals['total_5'] ?? 0,
         $innoout_totals['total_7'] ?? 0,
         $innoout_totals['total_14'] ?? 0
     );
 
     $noin_text = sprintf(
-        "已申報未進倉件數: 5日前共 %d 件, 7日前共 %d 件, 14日前共 %d 件",
+        "近5日已申報未進倉共 %d 件； 近7日共 %d 件； 近14日共 %d 件", // 調整文字描述更精確
         $noin_totals['total_5'] ?? 0,
         $noin_totals['total_7'] ?? 0,
         $noin_totals['total_14'] ?? 0
     );
 
-    $marquee_text = $innoout_text . '； ' . $noin_text;
+    $marquee_text = $innoout_text . ' || ' . $noin_text; // 使用 || 分隔，更清晰
 
 } catch (PDOException $e) {
     // 如果資料庫查詢失敗，顯示預設訊息
@@ -125,7 +127,6 @@ try {
                 <a href="abnormal.php" class="sidebar-link" target="contentFrame">
                     <span class="icon">✏️</span> 異常件查詢
                 </a>
-                <!-- 【*** 新增邏輯：增加手機掃碼連結，並在新視窗開啟 ***】 -->
                 <a href="mobilscan.php" class="sidebar-link" onclick="window.open(this.href, 'ScanWindow', 'width=500,height=800,scrollbars=yes,resizable=yes'); return false;">
                     <span class="icon">📱</span> 手機掃碼
                 </a>
@@ -138,7 +139,6 @@ try {
         <!-- Main Content -->
         <div class="flex-1 flex flex-col">
             <header class="h-16 bg-white shadow-md flex items-center justify-between px-6">
-                <!-- 【*** 新增跑馬燈功能 ***】 -->
                 <div class="flex-1 text-red-600 font-semibold overflow-hidden">
                     <marquee behavior="scroll" direction="left" scrollamount="6">
                         <?php echo htmlspecialchars($marquee_text); ?>
@@ -172,4 +172,3 @@ try {
     </script>
 </body>
 </html>
-
