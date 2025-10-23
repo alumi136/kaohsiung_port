@@ -18,7 +18,7 @@ if (isset($_GET['logout'])) {
 
 // --- 統計資料計算 ---
 $innoout_text = '已進未出資訊載入失敗'; // 預設值
-$noin_text = '已申報未進倉資訊載入失敗'; // 預設值
+$noin_text = 'ND件可進倉資訊載入失敗'; // 預設值
 $seized_text = '查扣件數資訊載入失敗'; // 預設值
 
 try {
@@ -39,24 +39,28 @@ try {
         $innoout_totals['total_14'] ?? 0
     );
 
-    // 2. 計算「已申報未進倉」的累計總和 (來自 daily_arrange)
+    // 2. 計算「ND件可進倉」的累計總和 (來自 daily_arrange, 且 status = 1)
+    // 【最新修改】加入 status = 1 的條件
     $stmt_noin = $pdo->query("
         SELECT
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 4 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_5,
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_7,
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 13 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_14
         FROM daily_arrange
-        
+        WHERE status = 1 -- 只計算已通關的資料
+         
     ");
     $noin_totals = $stmt_noin->fetch(PDO::FETCH_ASSOC);
+    // 【最新修改】更改顯示標籤
     $noin_text = sprintf(
-        "已申報未進倉：近5日共 %d 件； 近7日共 %d 件； 近14日共 %d 件",
+        "[ND件可進倉]：近5日共 %d 件； 近7日共 %d 件； 近14日共 %d 件",
         $noin_totals['total_5'] ?? 0,
         $noin_totals['total_7'] ?? 0,
         $noin_totals['total_14'] ?? 0
     );
 
-    // 3. 【新增邏輯】計算「查扣」件數 (來自 daily_outbound, status0=5)
+    // 3. 計算「查扣」件數 (來自 daily_outbound, status0=5, 且未出倉)
+    // 【最新修改】加入 storage_out_datetime IS NULL 的條件
     // 假設 created_at 是 DATETIME 或 TIMESTAMP
     $stmt_seized = $pdo->query("
         SELECT
@@ -65,11 +69,12 @@ try {
             SUM(CASE WHEN created_at BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN 1 ELSE 0 END) AS total_7
         FROM daily_outbound
         WHERE status0 = 5
+          AND storage_out_datetime IS NULL -- 只計算尚未出倉的
           AND created_at IS NOT NULL -- 確保 created_at 有效
     ");
     $seized_totals = $stmt_seized->fetch(PDO::FETCH_ASSOC);
     $seized_text = sprintf(
-        "查扣件數：近3日共 %d 件； 近5日共 %d 件； 近7日共 %d 件",
+        "查扣件數(未出倉)：近3日共 %d 件； 近5日共 %d 件； 近7日共 %d 件", // 標題加註(未出倉)更清晰
         $seized_totals['total_3'] ?? 0,
         $seized_totals['total_5'] ?? 0,
         $seized_totals['total_7'] ?? 0
@@ -118,14 +123,14 @@ try {
             width: 1.25rem;
             height: 1.25rem;
         }
-        /* 【新增樣式】靜態統計文字的樣式 */
+        /* 靜態統計文字的樣式 */
         .header-stats {
             font-size: 0.875rem; /* text-sm */
             line-height: 1.25rem;
             color: #4b5563; /* gray-600 */
             font-weight: 500; /* medium */
         }
-        /* 可以為查扣增加特殊顏色 */
+        /* 查扣增加特殊顏色 */
         .seized-stats {
              color: #dc2626; /* red-600 */
         }
@@ -169,7 +174,7 @@ try {
         <!-- Main Content -->
         <div class="flex-1 flex flex-col">
             <header class="h-auto md:h-16 bg-white shadow-md flex flex-col md:flex-row items-center justify-between px-6 py-2 md:py-0">
-                <!-- 【最新修改】移除跑馬燈，改為靜態顯示區塊 -->
+                <!-- 靜態顯示區塊 -->
                 <div class="header-stats flex-1 mb-2 md:mb-0 md:mr-4">
                     <p><?php echo htmlspecialchars($innoout_text); ?></p>
                     <p><?php echo htmlspecialchars($noin_text); ?></p>
