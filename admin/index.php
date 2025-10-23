@@ -27,11 +27,12 @@ try {
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_7,
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 13 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_14
         FROM daily_arrange
-        WHERE arrival_date IS NOT NULL AND arrival_date > '0000-00-00' -- 排除無效日期
+        --WHERE arrival_date IS NOT NULL AND arrival_date > '0000-00-00' -- 排除無效日期
     ");
     $innoout_totals = $stmt_innoout->fetch(PDO::FETCH_ASSOC);
 
-    // 【最新修正】修改 SQL 邏輯，使用 BETWEEN 查詢特定區間，並排除無效日期
+    // 【最新修正】修改 SQL 邏輯，使用 BETWEEN 查詢特定區間
+    // 【本次修改】移除排除無效日期的 WHERE 條件
     // 計算「已申報未進倉」的累計總和
     $stmt_noin = $pdo->query("
         SELECT
@@ -39,6 +40,7 @@ try {
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_7,
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 13 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_14
         FROM daily_arrange
+        -- WHERE arrival_date IS NOT NULL AND arrival_date > '0000-00-00' -- 【移除】排除無效日期
     ");
     $noin_totals = $stmt_noin->fetch(PDO::FETCH_ASSOC);
 
@@ -60,9 +62,9 @@ try {
     $marquee_text = $innoout_text . ' || ' . $noin_text; // 使用 || 分隔，更清晰
 
 } catch (PDOException $e) {
-    // 如果資料庫查詢失敗，顯示預設訊息
-    $marquee_text = "歡迎使用本系統，警示資訊載入失敗。";
-    // 可以選擇性地將錯誤記錄到日誌中
+    // 【最新修改】顯示詳細的資料庫錯誤訊息，而不是通用訊息
+    $marquee_text = "警示資訊載入失敗！錯誤訊息：" . $e->getMessage();
+    // 記錄詳細錯誤到伺服器日誌，方便追蹤 (正式環境建議開啟)
     // error_log("Marquee data query failed: " . $e->getMessage());
 }
 ?>
@@ -171,3 +173,4 @@ try {
     </script>
 </body>
 </html>
+
