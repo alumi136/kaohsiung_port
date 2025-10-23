@@ -27,7 +27,7 @@ try {
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_7,
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 13 DAY) AND CURDATE() THEN innoout ELSE 0 END) AS total_14
         FROM daily_arrange
-        --WHERE arrival_date IS NOT NULL AND arrival_date > '0000-00-00' -- 排除無效日期
+        
     ");
     $innoout_totals = $stmt_innoout->fetch(PDO::FETCH_ASSOC);
 
@@ -40,7 +40,7 @@ try {
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 6 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_7,
             SUM(CASE WHEN arrival_date BETWEEN (CURDATE() - INTERVAL 13 DAY) AND CURDATE() THEN noin ELSE 0 END) AS total_14
         FROM daily_arrange
-        -- WHERE arrival_date IS NOT NULL AND arrival_date > '0000-00-00' -- 【移除】排除無效日期
+        
     ");
     $noin_totals = $stmt_noin->fetch(PDO::FETCH_ASSOC);
 
