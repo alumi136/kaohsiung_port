@@ -94,7 +94,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Original files ETL cron job started (v35 - Status Logic Update). ====");
+write_log("==== Original files ETL cron job started (v36 - Exclude Shortage in Arrange Update). ====");
 $files_were_processed = false;
 
 try {
@@ -197,6 +197,7 @@ try {
             write_log("等待 300 秒 (5分鐘)，準備更新排櫃總表...");
             sleep(300);
             write_log("步驟 3/3: 正在從 daily_outbound 彙總資料並更新至 daily_arrange...");
+            // 【最新修改】在此 SQL 的子查詢中加入排除 status0 = 8 的條件
             $sql_update_arrange = "
             UPDATE
                 daily_arrange AS da
@@ -211,6 +212,7 @@ try {
                     daily_outbound
                 WHERE
                     master_no IS NOT NULL AND master_no != ''
+                    AND (status0 IS NULL OR status0 != 8) -- **新增排除短卸條件**
                 GROUP BY
                     master_no
                 ) AS stats ON da.bl_number = stats.master_no
@@ -219,13 +221,10 @@ try {
                 da.innoout = stats.calculated_innoout,
                 da.noin = stats.calculated_noin,
                 da.nodeclare = da.quantity - stats.calculated_inandout - stats.calculated_innoout - stats.calculated_noin,
-                
-                -- 【最新修改】將 status 的更新邏輯修改為判斷 inandout 是否超過 300
                 da.status = CASE
-                    WHEN stats.calculated_inandout > 300 THEN 1
+                    WHEN stats.calculated_inandout > 300 THEN 1 -- 使用您之前確認的 > 300 邏輯
                     ELSE da.status
                 END,
-
                 da.scale = CASE
                     WHEN da.quantity > 0 THEN
                         ROUND(((stats.calculated_inandout + stats.calculated_innoout + stats.calculated_noin) / da.quantity) * 100, 1)
