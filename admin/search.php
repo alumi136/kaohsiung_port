@@ -3,139 +3,143 @@
 session_start();
 
 // --- 檢查使用者是否已登入的邏輯 ---
-// 如果 Session 中沒有 'loggedin' 變數，或者 'loggedin' 不為 true
 if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true) {
-    // 將使用者導向到登入頁面
     header('Location: login.php');
-    exit(); // 確保重定向後停止執行
+    exit();
 }
 
-//<?php
-// --- 資料庫連線設定 ---
-$servername = "localhost";
-$username = "alumi136";
-$password = "Alumi!36";
-$dbname = "kaohsiung_port_db";
+// --- 資料庫連線設定 (使用 config.php 的 $pdo) ---
+require_once 'config.php';
+if (!isset($pdo)) {
+    die("系統錯誤：無法連線到資料庫。");
+}
 
 // --- 多筆查詢與 CSV 下載邏輯 ---
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['multi_query'])) {
-    
+
     $house_nos_raw = trim($_POST['house_nos_multi']);
     if (empty($house_nos_raw)) {
-        return;
-    }
+        // 如果為空，可以選擇返回或顯示錯誤，這裡選擇不執行任何操作
+        // header('Location: search.php?error=multinone'); // 可選：重定向並帶錯誤碼
+        // exit();
+        // 或者直接結束，讓頁面正常顯示
+    } else {
+        $house_nos_input = preg_split('/\\r\\n|\\r|\\n/', $house_nos_raw);
+        $house_nos_input = array_filter(array_map('trim', $house_nos_input)); // 過濾空行並去除空白
 
-    $house_nos = preg_split('/\\r\\n|\\r|\\n/', $house_nos_raw);
-    $house_nos = array_filter(array_map('trim', $house_nos));
-
-    if (count($house_nos) > 50) {
-        die("查詢筆數超過 50 筆上限，請重新操作。");
-    }
-
-    if (!empty($house_nos)) {
-        $conn = new mysqli($servername, $username, $password, $dbname);
-        if ($conn->connect_error) {
-            die("資料庫連線失敗: " . $conn->connect_error);
-        }
-        $conn->set_charset("utf8mb4");
-
-        $placeholders = implode(',', array_fill(0, count($house_nos), '?'));
-        $types = str_repeat('s', count($house_nos));
-        
-        $sql = "SELECT master_no, house_no, storage_in_datetime, storage_out_datetime, status, remark FROM daily_outbound WHERE house_no IN ($placeholders)";
-        
-        $stmt = $conn->prepare($sql);
-        if ($stmt === false) {
-             die("資料庫查詢準備失敗: " . $conn->error);
-        }
-        $stmt->bind_param($types, ...$house_nos);
-        $stmt->execute();
-        $result = $stmt->get_result();
-
-        $db_results_map = [];
-        while ($row = $result->fetch_assoc()) {
-            $db_results_map[$row['house_no']] = $row;
+        if (count($house_nos_input) > 50) {
+            // die() 會直接中止，不太友好，可以考慮重定向或顯示錯誤訊息
+            $_SESSION['search_error'] = "查詢筆數超過 50 筆上限，請重新操作。";
+            header('Location: search.php');
+            exit();
         }
 
-        header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="通關狀態查詢結果.csv"');
+        if (!empty($house_nos_input)) {
+            try {
+                // --- 【修改 #3】CSV 查詢邏輯調整 ---
+                // 1. 準備 SQL 查詢所有可能的資料
+                $placeholders = implode(',', array_fill(0, count($house_nos_input), '?'));
+                $sql = "SELECT master_no, house_no, storage_in_datetime, storage_out_datetime, status, remark
+                        FROM daily_outbound
+                        WHERE house_no IN ($placeholders)";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($house_nos_input);
+                $all_db_results = $stmt->fetchAll(PDO::FETCH_ASSOC); // 獲取所有符合的資料
 
-        $output = fopen('php://output', 'w');
-        
-        fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+                // --- 準備 CSV 輸出 ---
+                header('Content-Type: text/csv; charset=utf-8');
+                header('Content-Disposition: attachment; filename="通關狀態查詢結果_' . date('YmdHis') . '.csv"');
+                $output = fopen('php://output', 'w');
+                fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM
 
-        fputcsv($output, ['主號', '分號', '進倉日期時間', '出倉日期時間', '狀態','備註']);
+                fputcsv($output, ['主號', '分號', '進倉日期時間', '出倉日期時間', '狀態', '備註']);
 
-        foreach ($house_nos as $house_no) {
-            $current_house_no = trim($house_no);
-            if (empty($current_house_no)) {
-                continue;
+                // 2. 處理查詢結果，確保所有輸入的分號都有對應輸出
+                $found_house_nos = []; // 用來追蹤哪些輸入的分號已找到資料
+
+                // 先寫入所有找到的資料
+                foreach ($all_db_results as $row) {
+                    fputcsv($output, [
+                        $row['master_no'],
+                        $row['house_no'],
+                        $row['storage_in_datetime'],
+                        $row['storage_out_datetime'],
+                        $row['status'],
+                        $row['remark']
+                    ]);
+                    // 標記這個分號已處理 (使用 array key 提高效率)
+                    $found_house_nos[$row['house_no']] = true;
+                }
+
+                // 再檢查原始輸入列表，為未找到的分號補上 "未進倉" 記錄
+                foreach ($house_nos_input as $input_house_no) {
+                    if (!isset($found_house_nos[$input_house_no])) {
+                        fputcsv($output, ['', $input_house_no, '', '', '未進倉', '']);
+                    }
+                }
+                // --- CSV 邏輯調整結束 ---
+
+                fclose($output);
+                // $stmt->close(); // PDOStatement 不需 close
+                // $conn->close(); // PDO 不需要手動 close
+                exit();
+
+            } catch (PDOException $e) {
+                 // 記錄錯誤，並提示使用者
+                 error_log("Multi-query CSV export failed: " . $e->getMessage());
+                 $_SESSION['search_error'] = "匯出 CSV 時發生資料庫錯誤，請稍後再試。";
+                 header('Location: search.php');
+                 exit();
             }
-            if (isset($db_results_map[$current_house_no])) {
-                $row = $db_results_map[$current_house_no];
-                fputcsv($output, [
-                    $row['master_no'],
-                    $row['house_no'],
-                    $row['storage_in_datetime'],
-                    $row['storage_out_datetime'],
-		    $row['status'],
-		    $row['remark']
-                ]);
-            } else {
-                fputcsv($output, ['', $current_house_no, '', '', '未進倉','']);
-            }
+        } else {
+             $_SESSION['search_error'] = "請輸入至少一個有效的分號進行多筆查詢。";
+             header('Location: search.php');
+             exit();
         }
+    } // end else empty house_nos_raw
+} // end multi_query POST
 
-        fclose($output);
-        $stmt->close();
-        $conn->close();
-        exit();
-    }
+// --- 處理 Session 中的錯誤訊息 ---
+$error_message = '';
+if (isset($_SESSION['search_error'])) {
+    $error_message = $_SESSION['search_error'];
+    unset($_SESSION['search_error']); // 顯示後清除
 }
 
 // --- 單筆查詢的變數初始化 ---
-$single_result = null;
-$error_message = '';
+$single_results = []; // 【修改 #2】改為陣列以儲存多筆結果
 $house_no_single = '';
-$advanced_view = false;
+// 【修改 #1】預設勾選進階視圖
+// 如果是 POST 請求，則根據表單提交的值；否則預設為 true
+$advanced_view = $_SERVER["REQUEST_METHOD"] == "POST" ? isset($_POST['advanced_view']) : true;
+
 
 // --- 單筆查詢邏輯 ---
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])) {
     $house_no_single = trim($_POST['house_no_single']);
-    $advanced_view = isset($_POST['advanced_view']);
+    // $advanced_view 已在上面根據 POST 值設定
 
     if (!empty($house_no_single)) {
-        $conn = new mysqli($servername, $username, $password, $dbname);
-        if ($conn->connect_error) {
-            $error_message = "資料庫連線失敗: " . $conn->connect_error;
-        } else {
-            $conn->set_charset("utf8mb4");
+        try {
+            // --- 【修改 #2】查詢邏輯調整 ---
+            // 統一查詢所有可能需要的欄位，無論是否勾選進階，後續再決定顯示哪些
+            $sql = "SELECT master_no, house_no, declaration_no, weight, total_packages, packages_in, packages_out, clearance_method, storage_in_datetime, storage_out_datetime, status, remark
+                    FROM daily_outbound
+                    WHERE house_no = ?";
 
-            // 根據是否勾選進階來決定查詢的欄位
-            if ($advanced_view) {
-                // **【修改點 2】將 SQL 中的 renark 改為 remark **
-                $sql = "SELECT master_no, house_no, declaration_no, weight, total_packages, packages_in, packages_out, clearance_method, storage_in_datetime, storage_out_datetime, status, remark FROM daily_outbound WHERE house_no = ?";
-            } else {
-                $sql = "SELECT master_no, house_no, storage_in_datetime, storage_out_datetime, status FROM daily_outbound WHERE house_no = ?";
-            }
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$house_no_single]);
+            $single_results = $stmt->fetchAll(PDO::FETCH_ASSOC); // 獲取所有符合的紀錄
 
-            $stmt = $conn->prepare($sql);
-            
-            if ($stmt === false) {
-                 $error_message = "資料庫查詢準備失敗，請檢查欄位名稱是否正確。";
-            } else {
-                $stmt->bind_param("s", $house_no_single);
-                $stmt->execute();
-                $result = $stmt->get_result();
-                
-                if ($result->num_rows > 0) {
-                    $single_result = $result->fetch_assoc();
-                } else {
-                    $error_message = "找不到符合分號 '" . htmlspecialchars($house_no_single) . "' 的資料，若是我司申報,目前尚未通關,請再耐心等候。";
-                }
-                $stmt->close();
+            if (count($single_results) === 0) {
+                $error_message = "找不到符合分號 '" . htmlspecialchars($house_no_single) . "' 的資料，若是我司申報,目前尚未通關,請再耐心等候。";
             }
-            $conn->close();
+            // 不需要特別處理 count > 1 的情況，直接在 HTML 中迴圈顯示即可
+            // --- 查詢邏輯調整結束 ---
+
+        } catch (PDOException $e) {
+            $error_message = "資料庫查詢失敗: " . $e->getMessage();
+            error_log("Single query failed: " . $e->getMessage()); // 記錄詳細錯誤
         }
     } else {
         $error_message = "請輸入要查詢的分號。";
@@ -152,20 +156,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])) {
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
-        .result-grid {
-            display: grid;
-            grid-template-columns: 150px 1fr;
-            gap: 0.75rem;
-        }
-        .result-grid dt {
-            font-weight: 600;
-            color: #4A5568; /* text-gray-700 */
-            text-align: right;
-            padding-right: 1rem;
-        }
-        .result-grid dd {
-            color: #1A202C; /* text-gray-900 */
-        }
+        .result-grid { display: grid; grid-template-columns: 150px 1fr; gap: 0.75rem; }
+        .result-grid dt { font-weight: 600; color: #4A5568; text-align: right; padding-right: 1rem; }
+        .result-grid dd { color: #1A202C; }
+        /* 為多筆結果增加分隔線 */
+        .result-item:not(:last-child) { border-bottom: 1px dashed #e2e8f0; padding-bottom: 1rem; margin-bottom: 1rem; }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -177,8 +172,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])) {
             </h1>
         </header>
 
+        <?php // 在頂部顯示 Session 錯誤訊息 (來自 CSV 匯出失敗等)
+        if ($error_message && $_SERVER["REQUEST_METHOD"] != "POST"): ?>
+            <div class="mb-6 p-4 rounded-lg bg-red-100 text-red-800">
+                <?php echo htmlspecialchars($error_message); ?>
+            </div>
+        <?php endif; ?>
+
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-            
+
             <div class="bg-white rounded-xl shadow-lg p-6 md:p-8">
                 <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-3">單筆查詢</h2>
                 <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post" class="space-y-6">
@@ -187,6 +189,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])) {
                         <input type="text" name="house_no_single" id="house_no_single" value="<?php echo htmlspecialchars($house_no_single); ?>" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
                     </div>
                     <div class="flex items-center">
+                        <!-- 【修改 #1】預設勾選 checked -->
                         <input type="checkbox" name="advanced_view" id="advanced_view" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" <?php if ($advanced_view) echo 'checked'; ?>>
                         <label for="advanced_view" class="ml-2 block text-sm text-gray-900">顯示進階資訊</label>
                     </div>
@@ -197,34 +200,49 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])) {
                     </div>
                 </form>
 
-                <?php if ($single_result): ?>
-                <div class="mt-8 pt-6 border-t">
-                    <h3 class="text-lg font-semibold text-gray-900 mb-4">查詢結果:</h3>
-                    <dl class="result-grid">
-                        <dt>主號:</dt> <dd><?php echo htmlspecialchars($single_result['master_no'] ?? 'N/A'); ?></dd>
-                        <dt>分號:</dt> <dd><?php echo htmlspecialchars($single_result['house_no'] ?? 'N/A'); ?></dd>
-                        <?php if ($advanced_view): ?>
-                        <dt>報單號碼:</dt> <dd><?php echo htmlspecialchars($single_result['declaration_no'] ?? 'N/A'); ?></dd>
-                        <dt>重量 (KG):</dt> <dd><?php echo htmlspecialchars($single_result['weight'] ?? 'N/A'); ?></dd>
-                        <dt>總件數:</dt> <dd><?php echo htmlspecialchars($single_result['total_packages'] ?? 'N/A'); ?></dd>
-                        <dt>已進倉件數:</dt> <dd><?php echo htmlspecialchars($single_result['packages_in'] ?? 'N/A'); ?></dd>
-                        <dt>已出倉件數:</dt> <dd><?php echo htmlspecialchars($single_result['packages_out'] ?? 'N/A'); ?></dd>
-                        <dt>通關方式:</dt> <dd><?php echo htmlspecialchars($single_result['clearance_method'] ?? 'N/A'); ?></dd>
-                        <?php endif; ?>
-                        <dt>進倉日期時間:</dt> <dd><?php echo htmlspecialchars($single_result['storage_in_datetime'] ?? 'N/A'); ?></dd>
-                        <dt>出倉日期時間:</dt> <dd><?php echo htmlspecialchars($single_result['storage_out_datetime'] ?? 'N/A'); ?></dd>
-                        <dt>狀態:</dt> <dd class="font-bold <?php echo ($single_result['status'] == '已出倉') ? 'text-green-600' : 'text-red-600'; ?>"><?php echo htmlspecialchars($single_result['status'] ?? 'N/A'); ?></dd>
-                        
-                        <?php if ($advanced_view): ?>
-                        <dt>備註:</dt> <dd><?php echo htmlspecialchars($single_result['remark'] ?? 'N/A'); ?></dd>
-                        <?php endif; ?>
-                    </dl>
-                </div>
-                <?php elseif ($error_message): ?>
-                <div class="mt-8 pt-6 border-t">
-                     <p class="text-red-600"><?php echo $error_message; ?></p>
-                </div>
-                <?php endif; ?>
+                <?php // --- 【修改 #2】單筆查詢結果顯示邏輯調整 --- ?>
+                <?php if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])): // 只在執行單筆查詢後顯示結果或錯誤 ?>
+                    <?php if (!empty($single_results)): ?>
+                    <div class="mt-8 pt-6 border-t">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4">
+                            查詢結果 (分號: <?php echo htmlspecialchars($house_no_single); ?>)：
+                            <?php if (count($single_results) > 1): ?>
+                                <span class="text-red-600 font-normal">(找到 <?php echo count($single_results); ?> 筆不同主號的資料)</span>
+                            <?php endif; ?>
+                        </h3>
+                        <?php foreach ($single_results as $index => $result_item): ?>
+                        <div class="result-item">
+                            <?php if (count($single_results) > 1): ?>
+                                <h4 class="text-md font-semibold text-blue-800 mb-2">資料 <?php echo $index + 1; ?>:</h4>
+                            <?php endif; ?>
+                            <dl class="result-grid">
+                                <dt>主號:</dt> <dd><?php echo htmlspecialchars($result_item['master_no'] ?? 'N/A'); ?></dd>
+                                <dt>分號:</dt> <dd><?php echo htmlspecialchars($result_item['house_no'] ?? 'N/A'); ?></dd>
+                                <?php if ($advanced_view): // 根據 $advanced_view 決定是否顯示進階欄位 ?>
+                                <dt>報單號碼:</dt> <dd><?php echo htmlspecialchars($result_item['declaration_no'] ?? 'N/A'); ?></dd>
+                                <dt>重量 (KG):</dt> <dd><?php echo htmlspecialchars($result_item['weight'] ?? 'N/A'); ?></dd>
+                                <dt>總件數:</dt> <dd><?php echo htmlspecialchars($result_item['total_packages'] ?? 'N/A'); ?></dd>
+                                <dt>已進倉件數:</dt> <dd><?php echo htmlspecialchars($result_item['packages_in'] ?? 'N/A'); ?></dd>
+                                <dt>已出倉件數:</dt> <dd><?php echo htmlspecialchars($result_item['packages_out'] ?? 'N/A'); ?></dd>
+                                <dt>通關方式:</dt> <dd><?php echo htmlspecialchars($result_item['clearance_method'] ?? 'N/A'); ?></dd>
+                                <?php endif; ?>
+                                <dt>進倉日期時間:</dt> <dd><?php echo htmlspecialchars($result_item['storage_in_datetime'] ?? 'N/A'); ?></dd>
+                                <dt>出倉日期時間:</dt> <dd><?php echo htmlspecialchars($result_item['storage_out_datetime'] ?? 'N/A'); ?></dd>
+                                <dt>狀態:</dt> <dd class="font-bold <?php echo (isset($result_item['status']) && $result_item['status'] == '已出倉') ? 'text-green-600' : 'text-red-600'; ?>"><?php echo htmlspecialchars($result_item['status'] ?? 'N/A'); ?></dd>
+                                <?php if ($advanced_view): ?>
+                                <dt>備註:</dt> <dd><?php echo nl2br(htmlspecialchars($result_item['remark'] ?? 'N/A')); // 使用 nl2br 處理換行 ?></dd>
+                                <?php endif; ?>
+                            </dl>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                    <?php elseif (!empty($error_message)): // 只有在查詢後且無結果時顯示錯誤 ?>
+                    <div class="mt-8 pt-6 border-t">
+                         <p class="text-red-600"><?php echo htmlspecialchars($error_message); ?></p>
+                    </div>
+                    <?php endif; ?>
+                 <?php endif; // End if single_query POST ?>
+                 <?php // --- 單筆查詢結果顯示邏輯調整結束 --- ?>
             </div>
 
             <div class="bg-white rounded-xl shadow-lg p-6 md:p-8">
@@ -232,9 +250,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])) {
                 <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post" class="space-y-6">
                     <div>
                         <label for="house_nos_multi" class="block text-sm font-medium text-gray-700 mb-1">輸入多筆分號 (每筆一行)</label>
-                        <textarea name="house_nos_multi" id="house_nos_multi" rows="10" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                        <textarea name="house_nos_multi" id="house_nos_multi" rows="10" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="在此輸入分號，每行一個..."></textarea>
                         <p class="mt-2 text-sm text-gray-500">最多 50 筆資料。結果將會直接下載為 CSV 檔案。</p>
-                        <p id="line-count" class="mt-1 text-sm font-semibold text-gray-700">目前行數: 0</p>
+                        <p id="line-count-multi" class="mt-1 text-sm font-semibold text-gray-700">目前行數: 0</p> <?php // 修改 ID 避免衝突 ?>
                     </div>
                     <div>
                         <button type="submit" name="multi_query" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
@@ -248,23 +266,32 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])) {
     </div>
 
     <script>
-        const textarea = document.getElementById('house_nos_multi');
-        const lineCountDisplay = document.getElementById('line-count');
+        // 多筆查詢的行數計算
+        const textareaMulti = document.getElementById('house_nos_multi');
+        const lineCountDisplayMulti = document.getElementById('line-count-multi'); // 對應修改後的 ID
+        const limitMulti = 50;
 
-        textarea.addEventListener('input', () => {
-            const text = textarea.value;
+        textareaMulti.addEventListener('input', () => {
+            const text = textareaMulti.value;
+            // 計算行數時過濾空行
             const lines = text.split('\n').filter(line => line.trim() !== '');
             const count = lines.length;
-            
-            lineCountDisplay.textContent = `目前行數: ${count}`;
-            
-            if (count > 50) {
-                lineCountDisplay.classList.add('text-red-600');
-                lineCountDisplay.classList.remove('text-gray-700');
+
+            lineCountDisplayMulti.textContent = `目前行數: ${count}`;
+
+            if (count > limitMulti) {
+                lineCountDisplayMulti.classList.add('text-red-600');
+                lineCountDisplayMulti.classList.remove('text-gray-700');
             } else {
-                lineCountDisplay.classList.remove('text-red-600');
-                lineCountDisplay.classList.add('text-gray-700');
+                lineCountDisplayMulti.classList.remove('text-red-600');
+                lineCountDisplayMulti.classList.add('text-gray-700');
             }
+        });
+
+        // 頁面載入時觸發一次多筆查詢的 input 事件
+        document.addEventListener('DOMContentLoaded', () => {
+             const eventMulti = new Event('input');
+             textareaMulti.dispatchEvent(eventMulti);
         });
     </script>
 </body>
