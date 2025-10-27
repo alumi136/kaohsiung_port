@@ -36,7 +36,8 @@ HTML;
 
     echo "==== 開始執行原始資料更新程序 ====\n";
     echo "腳本路徑: original_drive_files.php\n";
-    echo "開始時間: "D . date('Y-m-d H:i:s') . "\n";
+    // 【*** 錯誤修正 ***】移除了 "D"
+    echo "開始時間: " . date('Y-m-d H:i:s') . "\n";
     echo "========================================\n\n";
     
     flush();
@@ -452,7 +453,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="md:col-span-2"><label>備註</label><textarea name="remarks" id="edit-remarks" class="form-input"></textarea></div>
                 <div class="md:col-span-2 flex items-center pt-2">
                     <input type="checkbox" name="hin" id="edit-hin" value="1" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
-                    <label for="edit-hin" class="ml-2 block text-sm font-medium text-gray-900">領櫃</label>
+                    <label for="edit-hin" class="ml-2 block text-sm font-medium text-gray-900">領櫃</Vlabel>
                 </div>
                 <div class="md:col-span-2">
                     <label>狀態</label>
