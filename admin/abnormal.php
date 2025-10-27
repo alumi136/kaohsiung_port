@@ -21,7 +21,7 @@ function write_log($message) {
     file_put_contents($log_file, $formatted_message, FILE_APPEND);
 }
 
-// 【修改 #2】更新異常件類型列表，加入短卸
+// 【修改 #2】更新異常件類型列表，加入短卸 (此處無變動)
 $status0_types = [
     'ALL' => '所有異常件 (不含漏刷)',
     '1' => '轉正報',
@@ -111,8 +111,8 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
         $params_for_where[] = $master_no_query;
     } elseif ($use_date_range) {
         $date_column_to_filter = 'storage_in_datetime';
-        // 【修改 #2】已申報未進倉 和 短卸 使用 created_at
-        if ($selected_status0 === 'DECLARED_NOT_IN' || $selected_status0 === '8') { $date_column_to_filter = 'created_at'; }
+        // 【*** 核心修改 ***】加入 '5' (查扣) 條件
+        if ($selected_status0 === 'DECLARED_NOT_IN' || $selected_status0 === '8' || $selected_status0 === '5') { $date_column_to_filter = 'created_at'; }
         $where_clauses[] = "`{$date_column_to_filter}` BETWEEN ? AND ?";
         $params_for_where[] = $start_date . " 00:00:00";
         $params_for_where[] = $end_date . " 23:59:59";
@@ -196,8 +196,8 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                     $params_for_where[] = $master_no_query;
                 } elseif ($use_date_range) {
                     $date_column_to_filter = 'storage_in_datetime';
-                     // 【修改 #2】已申報未進倉 和 短卸 使用 created_at
-                    if ($selected_status0 === 'DECLARED_NOT_IN' || $selected_status0 === '8') { $date_column_to_filter = 'created_at'; }
+                     // 【*** 核心修改 ***】加入 '5' (查扣) 條件
+                    if ($selected_status0 === 'DECLARED_NOT_IN' || $selected_status0 === '8' || $selected_status0 === '5') { $date_column_to_filter = 'created_at'; }
                     $where_clauses[] = "`{$date_column_to_filter}` BETWEEN ? AND ?";
                     $params_for_where[] = $start_date . " 00:00:00";
                     $params_for_where[] = $end_date . " 23:59:59";
@@ -290,8 +290,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                         <label for="end_date" class="block text-sm font-medium text-gray-700 mb-1">結束日期</label>
                         <input type="date" name="end_date" id="end_date" class="form-input" value="<?php echo htmlspecialchars($end_date); ?>">
                     </div>
-                     <!-- 【修改 #1】新增主號輸入框 -->
-                    <div>
+                     <div>
                         <label for="master_no" class="block text-sm font-medium text-gray-700 mb-1">主號 (擇一)</label>
                         <input type="text" name="master_no" id="master_no" class="form-input" placeholder="輸入完整主號" value="<?php echo htmlspecialchars($master_no_query); ?>">
                     </div>
@@ -321,7 +320,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                 </form>
                  <p class="mt-4 text-sm text-gray-600">
                     <span class="font-semibold text-red-600">注意：</span>「異常件類型」為必選。請選擇「日期區間」或「主號」其中一項作為查詢條件。<br>
-                    <span class="font-semibold text-gray-800">提示：</span>日期範圍最長為 90 天。「查扣」類型可不選日期或主號以查詢全部。「已申報未進倉」及「短卸」使用資料建立時間篩選，其餘類型使用進倉時間。
+                    <span class="font-semibold text-gray-800">提示：</span>日期範圍最長為 90 天。「查扣」類型可不選日期或主號以查詢全部。「查扣」、「已申報未進倉」及「短卸」使用資料建立時間篩選，其餘類型使用進倉時間。
                 </p>
             </div>
             <?php if (count($report_results) > 0): ?>
@@ -340,8 +339,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                                     <th>通關方式</th>
                                     <th>進倉日期時間</th>
                                     <th>出倉日期時間</th>
-                                    <th>建立時間</th> <!-- 新增表頭 -->
-                                    <th>備註 (remark)</th>
+                                    <th>建立時間</th> <th>備註 (remark)</th>
                                     <th>狀態 (status0)</th>
                                 </tr>
                             </thead>
@@ -357,16 +355,14 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                                     <td><?php echo htmlspecialchars($row['clearance_method'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['storage_in_datetime'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['storage_out_datetime'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['created_at'] ?? ''); ?></td> <!-- 新增資料 -->
-                                    <td class="whitespace-normal break-words max-w-xs"><?php echo nl2br(htmlspecialchars($row['remark'] ?? '')); ?></td>
+                                    <td><?php echo htmlspecialchars($row['created_at'] ?? ''); ?></td> <td class="whitespace-normal break-words max-w-xs"><?php echo nl2br(htmlspecialchars($row['remark'] ?? '')); ?></td>
                                     <td><?php echo htmlspecialchars($row['status0'] ?? ''); ?></td>
                                 </tr>
                                 <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
-                    <!-- 分頁導航 -->
-                     <div class="mt-8 flex justify-center items-center space-x-3 text-sm">
+                    <div class="mt-8 flex justify-center items-center space-x-3 text-sm">
                         <?php if ($total_pages > 1): ?>
                             <?php
                                 // 重新組合基礎 URL 參數，確保分頁連結正確
