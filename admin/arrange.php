@@ -36,7 +36,7 @@ HTML;
 
     echo "==== 開始執行原始資料更新程序 ====\n";
     echo "腳本路徑: original_drive_files.php\n";
-    echo "開始時間: " . date('Y-m-d H:i:s') . "\n";
+    echo "開始時間: "D . date('Y-m-d H:i:s') . "\n";
     echo "========================================\n\n";
     
     flush();
@@ -128,15 +128,18 @@ if (isset($_GET['download_csv'])) {
 
         $headers = [
             '到港日', '主單號', '櫃號', '船掛', '船名', '總件數', '重量', '客戶配送別', '備註', 
+            '領櫃', // 【修改】新增領櫃欄位
             '狀態', '已進已出', '已進未出', '已申報未進倉', '未申報', '銷倉率(%)'
         ];
         fputcsv($output, $headers);
 
         while ($row = $data_stmt->fetch(PDO::FETCH_ASSOC)) {
             $status_text = $row['status'] ? '已通關' : '未通關';
+            $hin_text = $row['hin'] ? 'V' : ''; // 【修改】新增領櫃值
             $csv_row = [
                 $row['arrival_date'], $row['bl_number'], $row['container_number'], $row['vessel_code'],
                 $row['vessel_name'], $row['quantity'], $row['weight'], $row['warehouse'], $row['remarks'],
+                $hin_text, // 【修改】新增領櫃值
                 $status_text, $row['inandout'], $row['innoout'], $row['noin'], $row['nodeclare'], $row['scale']
             ];
             fputcsv($output, $csv_row);
@@ -168,7 +171,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $highestRow = $sheet->getHighestRow();
             $pdo->beginTransaction();
             $check_stmt = $pdo->prepare("SELECT id FROM daily_arrange WHERE bl_number = ? AND container_number = ?");
-            $insert_stmt = $pdo->prepare("INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            // 【修改】新增 hin 欄位
+            $insert_stmt = $pdo->prepare("INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status, hin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             $imported_count = 0; $skipped_count = 0;
             for ($row = 2; $row <= $highestRow; $row++) { 
                 $rowData = $sheet->rangeToArray('A' . $row . ':' . $sheet->getHighestColumn() . $row, NULL, TRUE, FALSE)[0];
@@ -185,7 +189,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $check_stmt->execute([$bl_number, $container_number]);
                 if ($check_stmt->fetch()) { $import_errors[] = "第 {$row} 行錯誤: 主單號與櫃號組合已存在，該行已略過。"; $skipped_count++; continue; }
                 $vessel_code = $rowData[4] ?? null; $vessel_name = $rowData[5] ?? null; $weight = $rowData[8] ?? 0; $remarks = $rowData[10] ?? null;
-                $insert_stmt->execute([$arrival_date, $bl_number, $container_number, $vessel_code, $vessel_name, $quantity, $weight, $warehouse, $remarks, 0]);
+                // 【修改】execute 陣列加入 hin 的預設值 0
+                $insert_stmt->execute([$arrival_date, $bl_number, $container_number, $vessel_code, $vessel_name, $quantity, $weight, $warehouse, $remarks, 0, 0]);
                 $imported_count++;
             }
             $pdo->commit();
@@ -194,13 +199,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'add') {
             if (empty($_POST['arrival_date']) || empty($_POST['bl_number']) || empty($_POST['container_number']) || empty($_POST['quantity']) || empty($_POST['warehouse'])) { $error = '新增失敗：必填欄位未填寫！'; } 
             else {
-                $stmt = $pdo->prepare("INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)");
-                $stmt->execute([$_POST['arrival_date'], $_POST['bl_number'], $_POST['container_number'], $_POST['vessel_code'], $_POST['vessel_name'], $_POST['quantity'], $_POST['weight'], $_POST['warehouse'], $_POST['remarks']]);
+                // 【修改】接收 hin 值
+                $hin_value = isset($_POST['hin']) ? 1 : 0;
+                // 【修改】INSERT 語句加入 hin
+                $stmt = $pdo->prepare("INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status, hin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)");
+                // 【修改】execute 陣列加入 $hin_value
+                $stmt->execute([$_POST['arrival_date'], $_POST['bl_number'], $_POST['container_number'], $_POST['vessel_code'], $_POST['vessel_name'], $_POST['quantity'], $_POST['weight'], $_POST['warehouse'], $_POST['remarks'], $hin_value]);
                 $message = '排櫃資料新增成功！';
             }
         } elseif ($action === 'edit') {
-            $stmt = $pdo->prepare("UPDATE daily_arrange SET arrival_date = ?, bl_number = ?, container_number = ?, vessel_code = ?, vessel_name = ?, quantity = ?, weight = ?, warehouse = ?, remarks = ?, status = ? WHERE id = ?");
-            $stmt->execute([$_POST['arrival_date'], $_POST['bl_number'], $_POST['container_number'], $_POST['vessel_code'], $_POST['vessel_name'], $_POST['quantity'], $_POST['weight'], $_POST['warehouse'], $_POST['remarks'], $_POST['status'], $_POST['id']]);
+            // 【修改】接收 hin 值
+            $hin_value = isset($_POST['hin']) ? 1 : 0;
+            // 【修改】UPDATE 語句加入 hin = ?
+            $stmt = $pdo->prepare("UPDATE daily_arrange SET arrival_date = ?, bl_number = ?, container_number = ?, vessel_code = ?, vessel_name = ?, quantity = ?, weight = ?, warehouse = ?, remarks = ?, status = ?, hin = ? WHERE id = ?");
+            // 【修改】execute 陣列加入 $hin_value
+            $stmt->execute([$_POST['arrival_date'], $_POST['bl_number'], $_POST['container_number'], $_POST['vessel_code'], $_POST['vessel_name'], $_POST['quantity'], $_POST['weight'], $_POST['warehouse'], $_POST['remarks'], $_POST['status'], $hin_value, $_POST['id']]);
             $message = '排櫃資料修改成功！';
         }
     } catch (PDOException $e) {
@@ -255,10 +268,8 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 <body class="bg-gray-100 p-6">
 <div class="container mx-auto bg-white p-8 rounded-lg shadow-lg">
 
-    <!-- 【最新修正】將標題和更新按鈕放在同一行 -->
     <div class="flex justify-between items-center mb-6">
         <h1 class="text-3xl font-bold text-gray-800">排櫃總表操作</h1>
-        <!-- 【最新修正】移動按鈕到此處，並修改樣式為藍色底 -->
         <button type="button" id="run-update-btn" onclick="runUpdateScript()" class="btn-primary">更新原始資料</button>
     </div>
 
@@ -291,7 +302,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
             </div>
             <div class="flex flex-col space-y-2 md:flex-row md:space-y-0 md:space-x-2">
                  <button type="submit" name="search" value="1" class="btn-primary w-full">查詢</button>
-                 <!-- 【最新修正】此處的紅色按鈕已被移除 -->
                  <button type="button" onclick="openModal('addModal')" class="btn-secondary w-full">新增</button>
                  <button type="button" onclick="openModal('importModal')" class="btn-secondary w-full">匯入</button>
                  <a href="?<?php echo http_build_query(array_merge($_GET, ['download_csv' => 1])); ?>" class="btn-success w-full text-center">下載查詢結果</a>
@@ -299,7 +309,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         </form>
     </div>
 
-    <!-- 表格顯示區 -->
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
@@ -322,7 +331,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php if (!$advanced_display): ?>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">備註</th>
                     <?php endif; ?>
-                    <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
+                    <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">領櫃</th> <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
                     <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
             </thead>
@@ -347,6 +356,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php if (!$advanced_display): ?>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-gray-600"><?php echo htmlspecialchars($row['remarks']); ?></td>
                     <?php endif; ?>
+                    <td class="px-3 py-4 whitespace-nowrap text-sm text-center font-bold text-green-600"><?php if ($row['hin'] == 1) echo '✅'; ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?php echo $row['status'] ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'; ?>"><?php echo $row['status'] ? '已通關' : '未通關'; ?></span>
                     </td>
@@ -360,7 +370,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         </table>
     </div>
 
-    <!-- 分頁 -->
     <div class="mt-4 flex justify-between items-center">
         <div class="text-sm text-gray-700">共 <?php echo $total_records; ?> 筆資料，目前在第 <?php echo $current_page; ?> / <?php echo $total_pages; ?> 頁</div>
         <div>
@@ -379,7 +388,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 </div>
 
-<!-- Modal 區塊 -->
 <div id="addModal" class="modal">
     <div class="modal-content">
         <h2 class="text-2xl font-bold mb-4">新增排櫃資料</h2>
@@ -395,6 +403,10 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div><label>重量</label><input type="text" name="weight" class="form-input"></div>
                 <div><label>客戶配送別 (*)</label><input type="text" name="warehouse" class="form-input" required></div>
                 <div class="md:col-span-2"><label>備註</label><textarea name="remarks" class="form-input"></textarea></div>
+                <div class="md:col-span-2 flex items-center pt-2">
+                    <input type="checkbox" name="hin" id="add-hin" value="1" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <label for="add-hin" class="ml-2 block text-sm font-medium text-gray-900">領櫃</label>
+                </div>
             </div>
             <div class="mt-6 flex justify-end space-x-2">
                 <button type="button" onclick="closeModal('addModal')" class="btn-secondary">取消</button>
@@ -438,6 +450,10 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div><label>重量</label><input type="text" name="weight" id="edit-weight" class="form-input"></div>
                 <div><label>客戶配送別 (*)</label><input type="text" name="warehouse" id="edit-warehouse" class="form-input" required></div>
                 <div class="md:col-span-2"><label>備註</label><textarea name="remarks" id="edit-remarks" class="form-input"></textarea></div>
+                <div class="md:col-span-2 flex items-center pt-2">
+                    <input type="checkbox" name="hin" id="edit-hin" value="1" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <label for="edit-hin" class="ml-2 block text-sm font-medium text-gray-900">領櫃</label>
+                </div>
                 <div class="md:col-span-2">
                     <label>狀態</label>
                     <select name="status" id="edit-status" class="form-input">
@@ -455,7 +471,6 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 </div>
 
 
-<!-- 執行進度顯示 Modal -->
 <div id="updateProgressModal" class="modal">
     <div class="modal-content">
         <h2 id="update-modal-title" class="text-2xl font-bold mb-4">正在更新原始資料...</h2>
@@ -484,6 +499,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         document.getElementById('edit-weight').value = data.weight;
         document.getElementById('edit-warehouse').value = data.warehouse;
         document.getElementById('edit-remarks').value = data.remarks;
+        document.getElementById('edit-hin').checked = (data.hin == 1); // 【修改】設定領櫃 checkbox
         document.getElementById('edit-status').value = data.status;
         openModal('editModal');
     }
@@ -523,4 +539,3 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
 </script>
 </body>
 </html>
-
