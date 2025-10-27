@@ -36,7 +36,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['multi_query'])) {
 
         if (!empty($house_nos_input)) {
             try {
-                // --- 【修改 #3】CSV 查詢邏輯調整 ---
+                // --- 【修改 #3】CSV 查詢邏輯調整 (此處為原註解，保留) ---
+                
                 // 1. 準備 SQL 查詢所有可能的資料
                 $placeholders = implode(',', array_fill(0, count($house_nos_input), '?'));
                 $sql = "SELECT master_no, house_no, storage_in_datetime, storage_out_datetime, status, remark
@@ -54,30 +55,40 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['multi_query'])) {
 
                 fputcsv($output, ['主號', '分號', '進倉日期時間', '出倉日期時間', '狀態', '備註']);
 
-                // 2. 處理查詢結果，確保所有輸入的分號都有對應輸出
-                $found_house_nos = []; // 用來追蹤哪些輸入的分號已找到資料
+                // --- 【核心修改】依照使用者輸入順序輸出 CSV ---
 
-                // 先寫入所有找到的資料
+                // 1. 將所有資料庫結果映射到以 house_no 為 key 的陣列
+                //    value 是一個陣列，因為一個分號可能對應多筆資料
+                $results_map = [];
                 foreach ($all_db_results as $row) {
-                    fputcsv($output, [
-                        $row['master_no'],
-                        $row['house_no'],
-                        $row['storage_in_datetime'],
-                        $row['storage_out_datetime'],
-                        $row['status'],
-                        $row['remark']
-                    ]);
-                    // 標記這個分號已處理 (使用 array key 提高效率)
-                    $found_house_nos[$row['house_no']] = true;
+                    $house_no = $row['house_no'];
+                    if (!isset($results_map[$house_no])) {
+                        $results_map[$house_no] = [];
+                    }
+                    $results_map[$house_no][] = $row;
                 }
 
-                // 再檢查原始輸入列表，為未找到的分號補上 "未進倉" 記錄
+                // 2. 遍歷使用者輸入的列表 ($house_nos_input)，確保輸出順序
                 foreach ($house_nos_input as $input_house_no) {
-                    if (!isset($found_house_nos[$input_house_no])) {
+                    // 檢查是否在映射中有找到資料
+                    if (isset($results_map[$input_house_no])) {
+                        // 找到了，遍歷該分號的所有資料並寫入
+                        foreach ($results_map[$input_house_no] as $row) {
+                            fputcsv($output, [
+                                $row['master_no'],
+                                $row['house_no'],
+                                $row['storage_in_datetime'],
+                                $row['storage_out_datetime'],
+                                $row['status'],
+                                $row['remark']
+                            ]);
+                        }
+                    } else {
+                        // 沒找到，寫入 "未進倉" 記錄
                         fputcsv($output, ['', $input_house_no, '', '', '未進倉', '']);
                     }
                 }
-                // --- CSV 邏輯調整結束 ---
+                // --- CSV 邏輯修改結束 ---
 
                 fclose($output);
                 // $stmt->close(); // PDOStatement 不需 close
@@ -189,7 +200,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['single_query'])) {
                         <input type="text" name="house_no_single" id="house_no_single" value="<?php echo htmlspecialchars($house_no_single); ?>" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
                     </div>
                     <div class="flex items-center">
-                        <!-- 【修改 #1】預設勾選 checked -->
                         <input type="checkbox" name="advanced_view" id="advanced_view" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" <?php if ($advanced_view) echo 'checked'; ?>>
                         <label for="advanced_view" class="ml-2 block text-sm text-gray-900">顯示進階資訊</label>
                     </div>
