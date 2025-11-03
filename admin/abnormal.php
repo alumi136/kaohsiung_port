@@ -98,7 +98,8 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     $params_for_where = [];
 
     // 條件 1: 異常件類型 (必選)
-    if ($selected_status0 === 'ALL') { $where_clauses[] = "status0 >= 1 AND status0 != 3"; }
+    // 【*** 需求 #2 修改 ***】
+    if ($selected_status0 === 'ALL') { $where_clauses[] = "remark IS NOT NULL AND remark != '' AND status0 != 3"; }
     elseif ($selected_status0 === 'LEAK_MISMATCH') { $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out)"; }
     elseif ($selected_status0 === 'LEAK_MISMATCH_NONZERO_OUT') { $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out) AND packages_out != 0"; }
     elseif ($selected_status0 === 'DECLARED_NOT_IN') { $where_clauses[] = "master_no IS NOT NULL AND house_no IS NOT NULL AND storage_in_datetime IS NULL"; }
@@ -120,6 +121,7 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
 
     // --- 執行查詢 ---
     // 【新增】加入 created_at 欄位
+    // 【*** 需求 #3 注意 ***】CSV 匯出欄位未包含 release_datetime，依需求 #4 不主動修改 CSV 欄位
     $sql = "SELECT
                 declaration_no, master_no, house_no, weight, total_packages,
                 packages_in, packages_out, clearance_method, storage_in_datetime,
@@ -183,7 +185,8 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                 $params_for_where = [];
 
                 // 條件 1: 異常件類型
-                if ($selected_status0 === 'ALL') { $where_clauses[] = "status0 >= 1 AND status0 != 3"; }
+                // 【*** 需求 #2 修改 ***】
+                if ($selected_status0 === 'ALL') { $where_clauses[] = "remark IS NOT NULL AND remark != '' AND status0 != 3"; }
                 elseif ($selected_status0 === 'LEAK_MISMATCH') { $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out)"; }
                 elseif ($selected_status0 === 'LEAK_MISMATCH_NONZERO_OUT') { $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out) AND packages_out != 0"; }
                 elseif ($selected_status0 === 'DECLARED_NOT_IN') { $where_clauses[] = "master_no IS NOT NULL AND house_no IS NOT NULL AND storage_in_datetime IS NULL"; }
@@ -257,7 +260,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
         .table thead th { @apply px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200; }
         .table tbody td { @apply px-4 py-3 whitespace-nowrap text-sm text-gray-700 border-b border-gray-100; }
         .pagination-link { @apply px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-100; }
-        .pagination-link.active { @apply bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700; }
+        .pagination-link.active { @apply bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-7V00; }
     </style>
 </head>
 <body class="bg-gray-100 p-4">
@@ -326,6 +329,12 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
             <?php if (count($report_results) > 0): ?>
                 <div class="bg-white rounded-lg shadow-lg p-6">
                     <h2 class="text-2xl font-bold text-gray-800 mb-6">查詢結果 (共 <?php echo $total_records; ?> 筆)</h2>
+                    <?php
+                        // 【*** 需求 #1 & #3 修改 ***】
+                        // 根據選擇的類型，決定是否顯示特定欄位
+                        $show_created_at = ($selected_status0 === '8' || $selected_status0 === 'DECLARED_NOT_IN');
+                        $show_release_datetime = ($selected_status0 === 'RELEASED_NOT_OUT');
+                    ?>
                     <div class="overflow-x-auto">
                         <table class="min-w-full divide-y divide-gray-200 table">
                             <thead>
@@ -337,9 +346,15 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                                     <th>已進倉件數</th>
                                     <th>已出倉件數</th>
                                     <th>通關方式</th>
+                                    <?php if ($show_release_datetime): // 需求 #3 ?>
+                                    <th>放行時間</th>
+                                    <?php endif; ?>
                                     <th>進倉日期時間</th>
                                     <th>出倉日期時間</th>
-                                    <th>建立時間</th> <th>備註 (remark)</th>
+                                    <?php if ($show_created_at): // 需求 #1 ?>
+                                    <th>建立時間</th>
+                                    <?php endif; ?>
+                                    <th>備註 (remark)</th>
                                     <th>狀態 (status0)</th>
                                 </tr>
                             </thead>
@@ -353,9 +368,15 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                                     <td><?php echo htmlspecialchars($row['packages_in'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['packages_out'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['clearance_method'] ?? ''); ?></td>
+                                    <?php if ($show_release_datetime): // 需求 #3 ?>
+                                    <td><?php echo htmlspecialchars($row['release_datetime'] ?? ''); ?></td>
+                                    <?php endif; ?>
                                     <td><?php echo htmlspecialchars($row['storage_in_datetime'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['storage_out_datetime'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['created_at'] ?? ''); ?></td> <td class="whitespace-normal break-words max-w-xs"><?php echo nl2br(htmlspecialchars($row['remark'] ?? '')); ?></td>
+                                    <?php if ($show_created_at): // 需求 #1 ?>
+                                    <td><?php echo htmlspecialchars($row['created_at'] ?? ''); ?></td>
+                                    <?php endif; ?>
+                                    <td class="whitespace-normal break-words max-w-xs"><?php echo nl2br(htmlspecialchars($row['remark'] ?? '')); ?></td>
                                     <td><?php echo htmlspecialchars($row['status0'] ?? ''); ?></td>
                                 </tr>
                                 <?php endforeach; ?>
