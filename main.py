@@ -1,161 +1,259 @@
-# -*- coding: utf-8 -*-
-import pandas as pd
-import pdfplumber  # 用於讀取 PDF 文字
-import re          # 用於搜尋特定文字 (正規表示法)
-import os
-from pathlib import Path
+import pygame, sys, random
 
-# --- 參數設定區 (使用者請在此修改) ---
-
-# 1. 您存放所有 PDF 檔案的資料夾路徑
-#    (請確保路徑寫法正確，建議使用 r'...' 或 '/')
-PDF_SOURCE_FOLDER = r'e:\56'
-
-# 2. 最終產出的 Excel 檔案路徑與名稱
-OUTPUT_EXCEL_PATH = r'e:\56r\稅單總表.xlsx'
-
-# --- 參數設定區結束 ---
-
-
-def clean_value(text_value):
+# ---------------------------------
+# 1. 遊戲輔助函式 (Helper Functions)
+# ---------------------------------
+def create_pipe():
+    """ 
+    隨機產生一對新的水管 (上方 & 下方)
+    回傳： (上方水管的 Rect, 下方水管的 Rect)
     """
-    輔助函式：清理抓取到的數字，移除空白和千分位逗號
-    """
-    if text_value:
-        return text_value.strip().replace(',', '')
-    return None
-
-
-def extract_data_from_pdf(pdf_path):
-    """
-    核心處理函式：開啟單一 PDF 檔案並抓取所需資料
-    """
-    full_text = ""
+    # 隨機決定水管縫隙的Y軸位置
+    # random.randrange(min, max) 會回傳一個 min ~ max 之間的隨機數
+    # 我們讓縫隙在 200 到 400 像素之間
+    random_pipe_pos = random.randrange(250, 450)
     
-    try:
-        # 使用 pdfplumber 開啟 PDF
-        with pdfplumber.open(pdf_path) as pdf:
-            # 根據您的範例，三聯的資料都一樣，
-            # 我們只需要讀取第一頁 (pdf.pages[0]) 即可
-            if pdf.pages:
-                full_text = pdf.pages[0].extract_text()
+    # 建立「下方」水管的 Rect
+    # 它的 top (頂部) 在 random_pipe_pos，寬 52，高 300
+    bottom_pipe = pipe_surface.get_rect(midtop=(400, random_pipe_pos))
+    
+    # 建立「上方」水管的 Rect
+    # 它的 bottom (底部) 在 random_pipe_pos - 150 (這是縫隙大小)
+    top_pipe = pipe_surface.get_rect(midbottom=(400, random_pipe_pos - 150))
+    
+    return top_pipe, bottom_pipe
+
+def move_pipes(pipes):
+    """
+    將 pipes 列表中的所有水管向左移動
+    回傳：新的水管列表
+    """
+    new_pipes = []
+    for pipe in pipes:
+        pipe.x -= 3 # 水管向左移動 3 像素
+        # 只保留還在畫面上的水管
+        if pipe.right > 0:
+            new_pipes.append(pipe)
+    return new_pipes
+
+def draw_pipes(pipes):
+    """
+    繪製所有水管
+    """
+    for pipe in pipes:
+        # 如果 pipe 的底部 y 座標 > 400，代表它是「下方」水管
+        if pipe.bottom >= 600:
+            screen.blit(pipe_surface, pipe)
+        else:
+            # 否則，它是「上方」水管，我們需要將圖片「翻轉」
+            flipped_pipe = pygame.transform.flip(pipe_surface, False, True) # (圖片, X翻轉, Y翻轉)
+            screen.blit(flipped_pipe, pipe)
+
+def check_collision(pipes):
+    """
+    檢查小鳥是否撞到水管或邊界
+    回傳：True (遊戲結束) / False (遊戲繼續)
+    """
+    # 1. 檢查是否撞到水管
+    for pipe in pipes:
+        if bird_rect.colliderect(pipe):
+            return True # 撞到了，遊戲結束
             
-            if not full_text:
-                # PDF 中沒有可讀取的文字 (可能是空白或純圖片)
-                return None, None, None, "Error: PDF 內無文字"
-                
-    except Exception as e:
-        # PDF 檔案已損壞或無法開啟
-        return None, None, None, f"Error: 無法讀取 PDF ({e})"
-    
-    # --- 開始使用正規表示法 (Regex) 抓取資料 ---
-    
-    tax_bill_num = None
-    total_tax = None
-    vat_base = None
-    
-    # 1. 抓取稅單號碼 (邏輯：'稅單號碼:' 後面跟著的 'BY' 開頭字串)
-    #    r'稅單號碼:\s*(BY[A-Za-z0-9]+)'
-    #    \s* = 允許中間有任意空白
-    #    (BY[A-Za-z0-9]+) = 我們要抓取的內容 (BY 開頭的英數字組合)
-    match_bill = re.search(r'稅單號碼:\s*(BY[A-Za-z0-9]+)', full_text)
-    if match_bill:
-        tax_bill_num = match_bill.group(1) # .group(1) 指的是抓取 () 內的內容
+    # 2. 檢查是否撞到天空或地板
+    if bird_rect.top <= 0 or bird_rect.bottom >= 550:
+        return True # 撞到了，遊戲結束
         
-    # 2. 抓取稅費合計 (邏輯：'稅費合計' 後面跟著的第一個數字)
-    #    r'稅費合計\s*([\d,]+)'
-    #    \s* = 允許中間有任意空白或換行
-    #    ([\d,]+) = 我們要抓取的內容 (由 數字 和 逗號 組成)
-    match_tax = re.search(r'稅費合計\s*([\d,]+)', full_text)
-    if match_tax:
-        total_tax = clean_value(match_tax.group(1))
+    return False # 安全過關
 
-    # 3. 抓取營業稅稅基 (邏輯：'營業稅稅基' 後面跟著的第一個數字)
-    #    r'營業稅稅基\s*([\d,]+)'
-    match_vat = re.search(r'營業稅稅基\s*([\d,]+)', full_text)
-    if match_vat:
-        vat_base = clean_value(match_vat.group(1))
-
-    # 檢查是否有缺漏
-    status = "Success"
-    if not all([tax_bill_num, total_tax, vat_base]):
-        missing = []
-        if not tax_bill_num: missing.append("稅單號碼")
-        if not total_tax: missing.append("稅費合計")
-        if not vat_base: missing.append("營業稅稅基")
-        status = f"Warning: 缺少資料 ({', '.join(missing)})"
-        
-    return tax_bill_num, total_tax, vat_base, status
-
-
-def main():
+def update_score(score_list, score):
     """
-    主執行函式
+    更新分數
     """
-    print("--- PDF 資料擷取系統啟動 ---")
-    
-    # --- 階段一: 路徑檢查與建立 ---
-    src_folder = Path(PDF_SOURCE_FOLDER)
-    output_file = Path(OUTPUT_EXCEL_PATH)
+    if score_list:
+        # 檢查小鳥是否飛過了第一組水管的中心
+        if score_list[0].centerx < bird_rect.centerx:
+            score += 1
+            # 移除這組水管，這樣才不會重複計分
+            score_list.pop(0) 
+    return score
 
-    if not src_folder.exists() or not src_folder.is_dir():
-        print(f"錯誤: 來源資料夾 '{PDF_SOURCE_FOLDER}' 不存在。")
-        print("請檢查參數 'PDF_SOURCE_FOLDER' 的路徑是否正確。")
-        return
+def display_score(game_state, score, high_score):
+    """
+    在螢幕上顯示分數
+    """
+    if game_state == 'playing':
+        score_text = game_font.render(str(score), True, (255, 255, 255))
+        score_rect = score_text.get_rect(center=(200, 50))
+        screen.blit(score_text, score_rect)
+        
+    if game_state == 'game_over':
+        # 遊戲結束時，顯示目前分數
+        score_text = game_font.render(f"Score: {score}", True, (255, 255, 255))
+        score_rect = score_text.get_rect(center=(200, 50))
+        screen.blit(score_text, score_rect)
 
-    # 建立輸出資料夾 (例如 ./output/)
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    # --- 階段二: 掃描與處理 PDF ---
-    # 找出資料夾中所有的 .pdf 檔案
-    pdf_files = list(src_folder.glob('*.pdf')) + list(src_folder.glob('*.PDF'))
-    
-    if not pdf_files:
-        print(f"錯誤: 在 '{src_folder}' 中找不到任何 .pdf 檔案。")
-        return
+        # 顯示最高分數
+        high_score_text = game_font.render(f"High Score: {high_score}", True, (255, 255, 255))
+        high_score_rect = high_score_text.get_rect(center=(200, 100))
+        screen.blit(high_score_text, high_score_rect)
         
-    print(f"找到 {len(pdf_files)} 個 PDF 檔案。開始處理...")
-    
-    # 用來存放所有抓取結果的列表
-    all_data = []
-    
-    for pdf_path in pdf_files:
-        print(f"正在處理: {pdf_path.name}")
+        # 顯示提示訊息
+        over_text = game_font.render("GAME OVER", True, (255, 0, 0))
+        over_rect = over_text.get_rect(center=(200, 250))
+        screen.blit(over_text, over_rect)
         
-        # 呼叫核心函式來抓資料
-        bill, tax, vat, status = extract_data_from_pdf(pdf_path)
-        
-        # 將結果存入
-        all_data.append({
-            'PDF原始檔名': pdf_path.name,
-            '稅單號碼': bill,
-            '稅費合計': tax,
-            '營業稅稅基': vat,
-            '處理狀態': status  # 額外增加一個狀態欄，方便您除錯
-        })
+        restart_text = game_font.render("Press SPACE to restart", True, (255, 255, 255))
+        restart_rect = restart_text.get_rect(center=(200, 300))
+        screen.blit(restart_text, restart_rect)
 
-    print("...所有檔案處理完成。")
+# ---------------------------------
+# 2. 遊戲主程式
+# ---------------------------------
 
-    # --- 階段三: 匯出 Excel 報表 ---
-    if not all_data:
-        print("沒有處理任何資料，程式結束。")
-        return
-        
-    try:
-        print(f"正在將結果匯出至 '{output_file}'...")
-        df = pd.DataFrame(all_data)
-        
-        # 確保欄位順序
-        columns_order = ['PDF原始檔名', '稅單號碼', '稅費合計', '營業稅稅基', '處理狀態']
-        df = df[columns_order]
-        
-        df.to_excel(output_file, index=False, engine='openpyxl')
-        
-        print("--- 報表產出成功！ ---")
-        print(f"檔案位置: {output_file.resolve()}")
-        
-    except Exception as e:
-        print(f"錯誤: 寫入 Excel 檔案時失敗: {e}")
+# 初始化 Pygame
+pygame.init()
 
-if __name__ == '__main__':
-    main()
+# --- 遊戲設定 ---
+WIDTH, HEIGHT = 400, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Flappy Bird by Python")
+clock = pygame.time.Clock()
+
+# 載入字體 (None = 預設字體, 40 = 大小)
+game_font = pygame.font.Font(None, 40)
+
+# --- 遊戲變數 ---
+# 物理
+GRAVITY = 0.25
+bird_velocity = 0
+FLAP_STRENGTH = -7 # 往上飛的力量 (負數代表Y軸往上)
+
+# 遊戲狀態
+game_active = True # True: 遊戲進行中, False: 遊戲結束畫面
+score = 0
+high_score = 0
+
+# --- 載入資源 (圖片) ---
+# 為了方便，如果找不到圖片，我們會用「色塊」代替
+try:
+    # 小鳥
+    bird_surface = pygame.image.load('bird.png').convert_alpha() # convert_alpha() 讓圖片透明背景生效
+    bird_surface = pygame.transform.scale(bird_surface, (34, 24)) # 縮放圖片
+except:
+    bird_surface = pygame.Surface((34, 24)) # 建立一個 34x24 的空畫布
+    bird_surface.fill((255, 255, 0)) # 填滿黃色
+# 取得小鳥的「矩形 (Rect)」，並放在起始位置
+bird_rect = bird_surface.get_rect(center=(50, HEIGHT // 2))
+
+try:
+    # 背景
+    bg_surface = pygame.image.load('background.png').convert()
+    bg_surface = pygame.transform.scale(bg_surface, (WIDTH, HEIGHT))
+except:
+    bg_surface = pygame.Surface((WIDTH, HEIGHT))
+    bg_surface.fill((100, 100, 255)) # 填滿藍色
+
+try:
+    # 水管
+    pipe_surface = pygame.image.load('pipe.png').convert()
+    pipe_surface = pygame.transform.scale(pipe_surface, (52, 300)) # 縮放水管
+except:
+    pipe_surface = pygame.Surface((52, 300))
+    pipe_surface.fill((0, 200, 0)) # 填滿綠色
+
+# --- 水管邏輯 ---
+pipe_list = [] # 儲存所有在畫面上的水管
+# 建立一個「計分用」的列表
+# 裡面只放「下方」水管，用來判斷是否飛過
+score_pipe_list = [] 
+
+# 建立一個自訂事件，用來定時產生水管
+SPAWNPIPE = pygame.USEREVENT
+# 設定計時器，每 1.5 秒 (1500 毫秒) 觸發一次 SPAWNPIPE 事件
+pygame.time.set_timer(SPAWNPIPE, 1500)
+
+
+# ---------------------------------
+# 3. 遊戲主迴圈 (Game Loop)
+# ---------------------------------
+while True:
+    
+    # --- 3.1 事件處理 (Event Handling) ---
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+            
+        # 監聽鍵盤按鍵
+        if event.type == pygame.KEYDOWN:
+            # 如果按下空白鍵
+            if event.key == pygame.K_SPACE:
+                if game_active:
+                    # 遊戲中：小鳥往上飛
+                    bird_velocity = 0 # 速度歸零
+                    bird_velocity += FLAP_STRENGTH # 加上往上的力量
+                else:
+                    # 遊戲結束畫面：重新開始
+                    game_active = True
+                    pipe_list.clear()
+                    score_pipe_list.clear()
+                    bird_rect.center = (50, HEIGHT // 2)
+                    bird_velocity = 0
+                    score = 0
+
+        # 監聽自訂事件 (SPAWNPIPE)
+        if event.type == SPAWNPIPE and game_active:
+            new_top_pipe, new_bottom_pipe = create_pipe()
+            pipe_list.append(new_top_pipe)
+            pipe_list.append(new_bottom_pipe)
+            score_pipe_list.append(new_bottom_pipe) # 只把下方水管加入計分列表
+
+    # --- 3.2 遊戲邏輯 (Game Logic) ---
+    
+    if game_active:
+        # --- 遊戲進行中 ---
+        
+        # (1) 更新小鳥物理
+        bird_velocity += GRAVITY
+        bird_rect.y += bird_velocity
+        
+        # (2) 更新水管位置
+        pipe_list = move_pipes(pipe_list)
+        
+        # (3) 檢查碰撞
+        if check_collision(pipe_list):
+            game_active = False # 遊戲結束
+            
+        # (4) 更新分數
+        score = update_score(score_pipe_list, score)
+        if score > high_score:
+            high_score = score
+            
+    else:
+        # --- 遊戲結束 ---
+        # (所有邏輯都暫停)
+        pass
+
+    # --- 3.3 畫面繪製 (Drawing) ---
+    
+    # (1) 畫背景
+    screen.blit(bg_surface, (0, 0))
+    
+    # (2) 畫水管
+    if game_active:
+        draw_pipes(pipe_list)
+    
+    # (3) 畫小鳥
+    screen.blit(bird_surface, bird_rect)
+    
+    # (4) 畫地板 (我們用一個簡單的色塊)
+    pygame.draw.rect(screen, (220, 200, 100), (0, 550, WIDTH, 50))
+    
+    # (5) 畫分數
+    display_score( 'playing' if game_active else 'game_over', score, high_score)
+
+    # --- 3.4 畫面更新 ---
+    pygame.display.update()
+    
+    # 控制遊戲速度 (FPS)
+    clock.tick(100) # 讓遊戲以每秒 100 偵的速度運行
