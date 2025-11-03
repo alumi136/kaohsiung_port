@@ -79,6 +79,11 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     if ($use_date_range && (!strtotime($start_date) || !strtotime($end_date) || strtotime($start_date) > strtotime($end_date))) { die("無效的匯出請求：日期範圍錯誤。"); }
     // --- 驗證結束 ---
 
+    // 【*** 需求 #1 & #2 修改 (CSV) ***】
+    // 定義動態欄位旗標
+    $show_created_at = ($selected_status0 === '8' || $selected_status0 === 'DECLARED_NOT_IN');
+    $show_release_datetime = ($selected_status0 === 'RELEASED_NOT_OUT');
+
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="異常件報告_' . date('Ymd_His') . '.csv"');
     header('Pragma: no-cache'); header('Expires: 0');
@@ -86,19 +91,31 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     $output = fopen('php://output', 'w');
     fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM
 
-    // 【新增】加入 created_at 欄位
-    fputcsv($output, [
+    // 【*** 需求 #1 & #2 修改 (CSV) ***】
+    // 動態建立 CSV 標頭
+    $headers = [
         '報關單號', '主號', '分號', '公斤', '總件數', '已進倉件數', '已出倉件數',
-        '通關方式', '進倉日期時間', '出倉日期時間', '建立時間', // 多加一個建立時間欄位
-        '備註 (remark)', '狀態 (status0)'
-    ]);
+        '通關方式'
+    ];
+    if ($show_release_datetime) {
+        $headers[] = '放行時間';
+    }
+    $headers[] = '進倉日期時間';
+    $headers[] = '出倉日期時間';
+    if ($show_created_at) {
+        $headers[] = '建立時間';
+    }
+    $headers[] = '備註 (remark)';
+    $headers[] = '狀態 (status0)';
+    fputcsv($output, $headers);
+
 
     // --- 構建查詢條件 (與下方 HTML 查詢邏輯一致) ---
     $where_clauses = [];
     $params_for_where = [];
 
     // 條件 1: 異常件類型 (必選)
-    // 【*** 需求 #2 修改 ***】
+    // 【*** 需求 #2 (上次修改) ***】
     if ($selected_status0 === 'ALL') { $where_clauses[] = "remark IS NOT NULL AND remark != '' AND status0 != 3"; }
     elseif ($selected_status0 === 'LEAK_MISMATCH') { $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out)"; }
     elseif ($selected_status0 === 'LEAK_MISMATCH_NONZERO_OUT') { $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out) AND packages_out != 0"; }
@@ -120,11 +137,13 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     }
 
     // --- 執行查詢 ---
-    // 【新增】加入 created_at 欄位
-    // 【*** 需求 #3 注意 ***】CSV 匯出欄位未包含 release_datetime，依需求 #4 不主動修改 CSV 欄位
+    // 【*** 需求 #2 修改 (CSV) ***】
+    // 加入 release_datetime 欄位
     $sql = "SELECT
                 declaration_no, master_no, house_no, weight, total_packages,
-                packages_in, packages_out, clearance_method, storage_in_datetime,
+                packages_in, packages_out, clearance_method, 
+                release_datetime, -- <== 修正：加入放行時間
+                storage_in_datetime,
                 storage_out_datetime, created_at, remark, status0
             FROM
                 daily_outbound
@@ -136,12 +155,29 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     try {
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params_for_where);
+        
+        // 【*** 需求 #1 & #2 修改 (CSV) ***】
+        // 動態建立 CSV 資料列
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-             fputcsv($output, [
+             $csv_row = [
                 $row['declaration_no'], $row['master_no'], $row['house_no'], $row['weight'], $row['total_packages'],
-                $row['packages_in'], $row['packages_out'], $row['clearance_method'], $row['storage_in_datetime'],
-                $row['storage_out_datetime'], $row['created_at'], $row['remark'], $row['status0']
-             ]);
+                $row['packages_in'], $row['packages_out'], $row['clearance_method']
+             ];
+             
+             if ($show_release_datetime) {
+                $csv_row[] = $row['release_datetime'];
+             }
+             $csv_row[] = $row['storage_in_datetime'];
+             $csv_row[] = $row['storage_out_datetime'];
+             
+             if ($show_created_at) {
+                $csv_row[] = $row['created_at'];
+             }
+             
+             $csv_row[] = $row['remark'];
+             $csv_row[] = $row['status0'];
+             
+             fputcsv($output, $csv_row);
         }
     } catch (PDOException $e) {
         write_log("CSV 匯出查詢失敗: " . $e->getMessage()); fclose($output); die("CSV 匯出失敗，請檢查日誌。");
@@ -185,7 +221,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                 $params_for_where = [];
 
                 // 條件 1: 異常件類型
-                // 【*** 需求 #2 修改 ***】
+                // 【*** 需求 #2 (上次修改) ***】
                 if ($selected_status0 === 'ALL') { $where_clauses[] = "remark IS NOT NULL AND remark != '' AND status0 != 3"; }
                 elseif ($selected_status0 === 'LEAK_MISMATCH') { $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out)"; }
                 elseif ($selected_status0 === 'LEAK_MISMATCH_NONZERO_OUT') { $where_clauses[] = "(total_packages != packages_in OR packages_in != packages_out OR total_packages != packages_out) AND packages_out != 0"; }
@@ -260,7 +296,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
         .table thead th { @apply px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200; }
         .table tbody td { @apply px-4 py-3 whitespace-nowrap text-sm text-gray-700 border-b border-gray-100; }
         .pagination-link { @apply px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-100; }
-        .pagination-link.active { @apply bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-7V00; }
+        .pagination-link.active { @apply bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700; }
     </style>
 </head>
 <body class="bg-gray-100 p-4">
@@ -330,7 +366,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                 <div class="bg-white rounded-lg shadow-lg p-6">
                     <h2 class="text-2xl font-bold text-gray-800 mb-6">查詢結果 (共 <?php echo $total_records; ?> 筆)</h2>
                     <?php
-                        // 【*** 需求 #1 & #3 修改 ***】
+                        // 【*** 需求 #1 & #3 修改 (HTML) ***】
                         // 根據選擇的類型，決定是否顯示特定欄位
                         $show_created_at = ($selected_status0 === '8' || $selected_status0 === 'DECLARED_NOT_IN');
                         $show_release_datetime = ($selected_status0 === 'RELEASED_NOT_OUT');
