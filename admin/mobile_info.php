@@ -2,6 +2,7 @@
 // 檔案: mobile_info.php
 // 說明: 查詢由 mobilscan.php 或 update.php 執行過的中段操作紀錄 (以 daily_outbound.customer_name 為準)
 // 範本: abnormal.php
+// v2: 1. 預設查詢當日資料。 2. 嚴格過濾空白的操作人。
 
 session_start();
 
@@ -27,20 +28,30 @@ function write_log($message) {
 // --- 查詢操作人列表 ---
 $operators = [];
 try {
+    // 【需求 #1】只撈出 administrators 中有 full_name 的人
     $stmt_op = $pdo->query("SELECT DISTINCT full_name FROM administrators WHERE full_name IS NOT NULL AND full_name != '' ORDER BY full_name");
     $operators = $stmt_op->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     write_log("無法獲取 administrators 列表: " . $e->getMessage());
-    // 非致命錯誤，允許頁面繼續載入
 }
 
 // --- 全域變數初始化 ---
 $user_message = '';
 $message_type = '';
 $report_results = [];
-$start_date = $_GET['start_date'] ?? ''; // 保留 GET 值以便表單回填
+
+// --- 【需求 #2】預設查詢當日 ---
+$is_default_load = ($_SERVER["REQUEST_METHOD"] == "GET" && empty($_GET));
+$start_date = $_GET['start_date'] ?? '';
 $end_date = $_GET['end_date'] ?? '';
 $selected_operator = $_GET['operator'] ?? ''; // 新增操作人查詢變數
+
+if ($is_default_load) {
+    $start_date = date('Y-m-d');
+    $end_date = date('Y-m-d');
+}
+// --- 預設查詢結束 ---
+
 
 // 分頁設定 (同 abnormal.php)
 $records_per_page = 30;
@@ -76,7 +87,7 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     header('Pragma: no-cache'); header('Expires: 0');
 
     $output = fopen('php://output', 'w');
-    fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM
+    fputs($output, "\xEF\xBB\BF"); // UTF-8 BOM
 
     // 【需求 #4】建立 CSV 標頭
     $headers = [
@@ -88,8 +99,8 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
 
 
     // --- 構建查詢條件 (與下方 HTML 查詢邏輯一致) ---
-    // 【需求 #1 & #3】
-    $where_clauses = ["customer_name IS NOT NULL", "created_at IS NOT NULL"]; // 基本條件
+    // 【需求 #1】嚴格篩選 customer_name
+    $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "created_at IS NOT NULL"]; // 基本條件
     $params_for_where = [];
 
     // 條件 1: 日期 (必選)
@@ -104,7 +115,6 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     }
 
     // --- 執行查詢 ---
-    // 【需求 #4】
     $sql = "SELECT
                 master_no, house_no, total_packages, packages_in, packages_out,
                 clearance_method, storage_in_datetime, storage_out_datetime,
@@ -120,7 +130,6 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params_for_where);
         
-        // 【需求 #4】動態建立 CSV 資料列
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
              $csv_row = [
                 $row['master_no'],
@@ -145,14 +154,12 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
 }
 
 // --- 處理查詢請求 (HTML 頁面顯示) ---
-if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
-    // 獲取查詢參數
-    $start_date = $_GET['start_date'] ?? '';
-    $end_date = $_GET['end_date'] ?? '';
-    $selected_operator = $_GET['operator'] ?? '';
+// 【需求 #2】增加 $is_default_load 條件
+if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is_default_load) {
+    
+    // (變數已在頁面頂部獲取)
 
     // --- 驗證查詢條件 ---
-    // 【需求 #1 & #3】
     if (empty($start_date) || empty($end_date)) {
         $user_message = "請務必選擇起始日期和結束日期。"; $message_type = 'warn';
     } else {
@@ -169,7 +176,8 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
     if (empty($user_message)) {
         try {
             // --- 構建查詢條件 (與上方 CSV 匯出邏輯一致) ---
-            $where_clauses = ["customer_name IS NOT NULL", "created_at IS NOT NULL"];
+            // 【需求 #1】嚴格篩選 customer_name
+            $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "created_at IS NOT NULL"];
             $params_for_where = [];
 
             // 條件 1: 日期 (必選)
@@ -195,7 +203,6 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
             $offset = ($current_page - 1) * $records_per_page; if ($offset < 0) $offset = 0;
 
             // --- 執行資料查詢 (同 abnormal.php) ---
-            // 【需求 #4】
             $sql = "SELECT
                         master_no, house_no, total_packages, packages_in, packages_out,
                         clearance_method, storage_in_datetime, storage_out_datetime,
@@ -209,12 +216,16 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
             $stmt->execute($final_query_params);
             $report_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            // 根據是否為預設載入修改提示訊息
+            $query_source_log = $is_default_load ? "預設查詢當日" : json_encode($_GET);
+            $query_source_msg = $is_default_load ? "預設顯示當日資料。" : "";
+
             if (count($report_results) > 0) {
-                $user_message = "查詢完成，共找到 " . $total_records . " 筆資料，目前顯示第 {$current_page} 頁。"; $message_type = 'success';
-                write_log("[{$logged_in_username}] 查詢中段操作成功，條件: " . json_encode($_GET) . "，共 {$total_records} 筆。");
+                $user_message = "查詢完成，共找到 " . $total_records . " 筆資料，目前顯示第 {$current_page} 頁。{$query_source_msg}"; $message_type = 'success';
+                write_log("[{$logged_in_username}] 查詢中段操作成功，條件: {$query_source_log}，共 {$total_records} 筆。");
             } else {
-                $user_message = "在選定條件下沒有找到符合條件的操作資料。"; $message_type = 'info';
-                write_log("[{$logged_in_username}] 查詢中段操作，條件: " . json_encode($_GET) . "，無資料。");
+                $user_message = "在選定條件下沒有找到符合條件的操作資料。{$query_source_msg}"; $message_type = 'info';
+                write_log("[{$logged_in_username}] 查詢中段操作，條件: {$query_source_log}，無資料。");
             }
 
         } catch (PDOException $e) {
@@ -222,7 +233,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
             write_log("[{$logged_in_username}] 查詢中段操作失敗: " . $e->getMessage());
         }
     } // end if validation passed
-} // end if query_report
+} // end if query_report or default_load
 
 ?>
 <!DOCTYPE html>
@@ -394,7 +405,7 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) {
                         <?php endif; ?>
                     </div>
                 </div>
-            <?php elseif (isset($_GET['query_report']) && empty($user_message)): ?>
+            <?php elseif ((isset($_GET['query_report']) || $is_default_load) && empty($user_message)): // 即使是預設載入，如果沒資料也顯示提示 ?>
                 <div class="bg-blue-100 text-blue-800 p-6 rounded-lg text-base">
                     <p>沒有找到符合您查詢條件的操作資料。</p>
                 </div>
