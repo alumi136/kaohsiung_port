@@ -1,8 +1,7 @@
 <?php
 // 檔案: mobile_info.php
 // 說明: 查詢由 mobilscan.php 或 update.php 執行過的中段操作紀錄 (以 daily_outbound.customer_name 為準)
-// 範本: abnormal.php
-// v2: 1. 預設查詢當日資料。 2. 嚴格過濾空白的操作人。
+// v3: 將所有 created_at 相關邏輯，全部改為 mobile_time
 
 session_start();
 
@@ -28,7 +27,6 @@ function write_log($message) {
 // --- 查詢操作人列表 ---
 $operators = [];
 try {
-    // 【需求 #1】只撈出 administrators 中有 full_name 的人
     $stmt_op = $pdo->query("SELECT DISTINCT full_name FROM administrators WHERE full_name IS NOT NULL AND full_name != '' ORDER BY full_name");
     $operators = $stmt_op->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
@@ -40,18 +38,16 @@ $user_message = '';
 $message_type = '';
 $report_results = [];
 
-// --- 【需求 #2】預設查詢當日 ---
+// --- 預設查詢當日 ---
 $is_default_load = ($_SERVER["REQUEST_METHOD"] == "GET" && empty($_GET));
 $start_date = $_GET['start_date'] ?? '';
 $end_date = $_GET['end_date'] ?? '';
-$selected_operator = $_GET['operator'] ?? ''; // 新增操作人查詢變數
+$selected_operator = $_GET['operator'] ?? ''; 
 
 if ($is_default_load) {
     $start_date = date('Y-m-d');
     $end_date = date('Y-m-d');
 }
-// --- 預設查詢結束 ---
-
 
 // 分頁設定 (同 abnormal.php)
 $records_per_page = 30;
@@ -60,7 +56,6 @@ $offset = ($current_page - 1) * $records_per_page;
 $total_records = 0;
 $total_pages = 1;
 
-// --- 資料庫連線 (使用 $pdo from config.php) ---
 if (!isset($pdo)) {
     die("系統錯誤：無法連線到資料庫。");
 }
@@ -80,31 +75,31 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     $days_diff = floor($date_diff / (60 * 60 * 24));
     if ($days_diff > 60) { die("無效的匯出請求：查詢範圍不能超過 60 天。"); }
     if ($days_diff < 0) { die("無效的匯出請求：起始日期不能晚於結束日期。"); }
-    // --- 驗證結束 ---
 
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="中段操作查詢報告_' . date('Ymd_His') . '.csv"');
     header('Pragma: no-cache'); header('Expires: 0');
 
     $output = fopen('php://output', 'w');
-    fputs($output, "\xEF\xBB\BF"); // UTF-8 BOM
+    fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM
 
-    // 【需求 #4】建立 CSV 標頭
+    // 【*** 邏輯修改 ***】 標籤 "建立時間" -> "操作時間"
     $headers = [
         '主號', '分號', '總件數', '已進倉件數', '已出倉件數',
-        '通關方式', '進倉日期時間', '出倉日期時間', '建立時間',
+        '通關方式', '進倉日期時間', '出倉日期時間', '操作時間',
         '操作人', '備註 (remark)', '狀態 (status0)'
     ];
     fputcsv($output, $headers);
 
 
     // --- 構建查詢條件 (與下方 HTML 查詢邏輯一致) ---
-    // 【需求 #1】嚴格篩選 customer_name
-    $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "created_at IS NOT NULL"]; // 基本條件
+    // 【*** 邏輯修改 ***】 created_at -> mobile_time
+    $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "mobile_time IS NOT NULL"]; // 基本條件
     $params_for_where = [];
 
     // 條件 1: 日期 (必選)
-    $where_clauses[] = "created_at BETWEEN ? AND ?";
+    // 【*** 邏輯修改 ***】 created_at -> mobile_time
+    $where_clauses[] = "mobile_time BETWEEN ? AND ?";
     $params_for_where[] = $start_date . " 00:00:00";
     $params_for_where[] = $end_date . " 23:59:59";
 
@@ -115,16 +110,17 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     }
 
     // --- 執行查詢 ---
+    // 【*** 邏輯修改 ***】 created_at -> mobile_time
     $sql = "SELECT
                 master_no, house_no, total_packages, packages_in, packages_out,
                 clearance_method, storage_in_datetime, storage_out_datetime,
-                created_at, customer_name, remark, status0
+                mobile_time, customer_name, remark, status0
             FROM
                 daily_outbound
             WHERE
                 " . implode(' AND ', $where_clauses) . "
             ORDER BY
-                created_at DESC, master_no ASC, house_no ASC";
+                mobile_time DESC, master_no ASC, house_no ASC";
 
     try {
         $stmt = $pdo->prepare($sql);
@@ -140,7 +136,7 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
                 $row['clearance_method'],
                 $row['storage_in_datetime'],
                 $row['storage_out_datetime'],
-                $row['created_at'],
+                $row['mobile_time'], // 【*** 邏輯修改 ***】
                 $row['customer_name'],
                 $row['remark'],
                 $row['status0']
@@ -154,11 +150,8 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
 }
 
 // --- 處理查詢請求 (HTML 頁面顯示) ---
-// 【需求 #2】增加 $is_default_load 條件
 if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is_default_load) {
     
-    // (變數已在頁面頂部獲取)
-
     // --- 驗證查詢條件 ---
     if (empty($start_date) || empty($end_date)) {
         $user_message = "請務必選擇起始日期和結束日期。"; $message_type = 'warn';
@@ -176,12 +169,13 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
     if (empty($user_message)) {
         try {
             // --- 構建查詢條件 (與上方 CSV 匯出邏輯一致) ---
-            // 【需求 #1】嚴格篩選 customer_name
-            $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "created_at IS NOT NULL"];
+            // 【*** 邏輯修改 ***】 created_at -> mobile_time
+            $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "mobile_time IS NOT NULL"];
             $params_for_where = [];
 
             // 條件 1: 日期 (必選)
-            $where_clauses[] = "created_at BETWEEN ? AND ?";
+            // 【*** 邏輯修改 ***】 created_at -> mobile_time
+            $where_clauses[] = "mobile_time BETWEEN ? AND ?";
             $params_for_where[] = $start_date . " 00:00:00";
             $params_for_where[] = $end_date . " 23:59:59";
 
@@ -203,13 +197,14 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
             $offset = ($current_page - 1) * $records_per_page; if ($offset < 0) $offset = 0;
 
             // --- 執行資料查詢 (同 abnormal.php) ---
+            // 【*** 邏輯修改 ***】 created_at -> mobile_time
             $sql = "SELECT
                         master_no, house_no, total_packages, packages_in, packages_out,
                         clearance_method, storage_in_datetime, storage_out_datetime,
-                        created_at, customer_name, remark, status0
+                        mobile_time, customer_name, remark, status0
                     FROM daily_outbound 
                     WHERE " . implode(' AND ', $where_clauses) . " 
-                    ORDER BY created_at DESC, master_no ASC, house_no ASC 
+                    ORDER BY mobile_time DESC, master_no ASC, house_no ASC 
                     LIMIT ? OFFSET ?";
             $stmt = $pdo->prepare($sql);
             $final_query_params = array_merge($params_for_where, [$records_per_page, $offset]);
@@ -333,7 +328,7 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
                                     <th>通關方式</th>
                                     <th>進倉日期時間</th>
                                     <th>出倉日期時間</th>
-                                    <th>建立時間</th>
+                                    <th>操作時間</th>
                                     <th>操作人</th>
                                     <th>備註 (remark)</th>
                                     <th>狀態 (status0)</th>
@@ -350,7 +345,7 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
                                     <td><?php echo htmlspecialchars($row['clearance_method'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['storage_in_datetime'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['storage_out_datetime'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['created_at'] ?? ''); ?></td>
+                                    <td><?php echo htmlspecialchars($row['mobile_time'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['customer_name'] ?? ''); ?></td>
                                     <td class="whitespace-normal break-words max-w-xs"><?php echo nl2br(htmlspecialchars($row['remark'] ?? '')); ?></td>
                                     <td><?php echo htmlspecialchars($row['status0'] ?? ''); ?></td>
