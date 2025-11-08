@@ -36,7 +36,6 @@ HTML;
 
     echo "==== 開始執行原始資料更新程序 ====\n";
     echo "腳本路徑: original_drive_files.php\n";
-    // 【*** 錯誤修正 ***】移除了 "D"
     echo "開始時間: " . date('Y-m-d H:i:s') . "\n";
     echo "========================================\n\n";
     
@@ -129,18 +128,18 @@ if (isset($_GET['download_csv'])) {
 
         $headers = [
             '到港日', '主單號', '櫃號', '船掛', '船名', '總件數', '重量', '客戶配送別', '備註', 
-            '領櫃', // 【修改】新增領櫃欄位
+            '領櫃', 
             '狀態', '已進已出', '已進未出', '已申報未進倉', '未申報', '銷倉率(%)'
         ];
         fputcsv($output, $headers);
 
         while ($row = $data_stmt->fetch(PDO::FETCH_ASSOC)) {
             $status_text = $row['status'] ? '已通關' : '未通關';
-            $hin_text = $row['hin'] ? 'V' : ''; // 【修改】新增領櫃值
+            $hin_text = $row['hin'] ? 'V' : ''; 
             $csv_row = [
                 $row['arrival_date'], $row['bl_number'], $row['container_number'], $row['vessel_code'],
                 $row['vessel_name'], $row['quantity'], $row['weight'], $row['warehouse'], $row['remarks'],
-                $hin_text, // 【修改】新增領櫃值
+                $hin_text, 
                 $status_text, $row['inandout'], $row['innoout'], $row['noin'], $row['nodeclare'], $row['scale']
             ];
             fputcsv($output, $csv_row);
@@ -172,7 +171,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $highestRow = $sheet->getHighestRow();
             $pdo->beginTransaction();
             $check_stmt = $pdo->prepare("SELECT id FROM daily_arrange WHERE bl_number = ? AND container_number = ?");
-            // 【修改】新增 hin 欄位
             $insert_stmt = $pdo->prepare("INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status, hin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             $imported_count = 0; $skipped_count = 0;
             for ($row = 2; $row <= $highestRow; $row++) { 
@@ -190,7 +188,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $check_stmt->execute([$bl_number, $container_number]);
                 if ($check_stmt->fetch()) { $import_errors[] = "第 {$row} 行錯誤: 主單號與櫃號組合已存在，該行已略過。"; $skipped_count++; continue; }
                 $vessel_code = $rowData[4] ?? null; $vessel_name = $rowData[5] ?? null; $weight = $rowData[8] ?? 0; $remarks = $rowData[10] ?? null;
-                // 【修改】execute 陣列加入 hin 的預設值 0
                 $insert_stmt->execute([$arrival_date, $bl_number, $container_number, $vessel_code, $vessel_name, $quantity, $weight, $warehouse, $remarks, 0, 0]);
                 $imported_count++;
             }
@@ -200,20 +197,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'add') {
             if (empty($_POST['arrival_date']) || empty($_POST['bl_number']) || empty($_POST['container_number']) || empty($_POST['quantity']) || empty($_POST['warehouse'])) { $error = '新增失敗：必填欄位未填寫！'; } 
             else {
-                // 【修改】接收 hin 值
                 $hin_value = isset($_POST['hin']) ? 1 : 0;
-                // 【修改】INSERT 語句加入 hin
                 $stmt = $pdo->prepare("INSERT INTO daily_arrange (arrival_date, bl_number, container_number, vessel_code, vessel_name, quantity, weight, warehouse, remarks, status, hin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)");
-                // 【修改】execute 陣列加入 $hin_value
                 $stmt->execute([$_POST['arrival_date'], $_POST['bl_number'], $_POST['container_number'], $_POST['vessel_code'], $_POST['vessel_name'], $_POST['quantity'], $_POST['weight'], $_POST['warehouse'], $_POST['remarks'], $hin_value]);
                 $message = '排櫃資料新增成功！';
             }
         } elseif ($action === 'edit') {
-            // 【修改】接收 hin 值
             $hin_value = isset($_POST['hin']) ? 1 : 0;
-            // 【修改】UPDATE 語句加入 hin = ?
             $stmt = $pdo->prepare("UPDATE daily_arrange SET arrival_date = ?, bl_number = ?, container_number = ?, vessel_code = ?, vessel_name = ?, quantity = ?, weight = ?, warehouse = ?, remarks = ?, status = ?, hin = ? WHERE id = ?");
-            // 【修改】execute 陣列加入 $hin_value
             $stmt->execute([$_POST['arrival_date'], $_POST['bl_number'], $_POST['container_number'], $_POST['vessel_code'], $_POST['vessel_name'], $_POST['quantity'], $_POST['weight'], $_POST['warehouse'], $_POST['remarks'], $_POST['status'], $hin_value, $_POST['id']]);
             $message = '排櫃資料修改成功！';
         }
@@ -349,7 +340,16 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php if ($advanced_display): ?>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-blue-600 font-semibold"><?php echo htmlspecialchars($row['inandout']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm"><a href="innoout_details.php?bl_number=<?php echo urlencode($row['bl_number']); ?>" target="_blank" class="text-yellow-600 hover:text-yellow-800 underline font-bold"><?php echo htmlspecialchars($row['innoout']); ?></a></td>
-                    <td class="px-3 py-4 whitespace-nowrap text-sm text-red-600 font-semibold"><?php echo htmlspecialchars($row['noin']); ?></td>
+                    
+                    <td class="px-3 py-4 whitespace-nowrap text-sm text-red-600 font-semibold">
+                        <?php if ($row['noin'] < 100): ?>
+                            <a href="noin_details.php?bl_number=<?php echo urlencode($row['bl_number']); ?>" target="_blank" class="hover:text-red-800 underline font-bold">
+                                <?php echo htmlspecialchars($row['noin']); ?>
+                            </a>
+                        <?php else: ?>
+                            <?php echo htmlspecialchars($row['noin']); ?>
+                        <?php endif; ?>
+                    </td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-gray-500 font-semibold"><?php echo htmlspecialchars($row['nodeclare']); ?></td>
                     <td class="px-3 py-4 whitespace-nowrap text-sm text-purple-600 font-bold"><?php echo htmlspecialchars($row['scale']); ?>%</td>
                     <?php endif; ?>
@@ -500,7 +500,7 @@ $results = $data_stmt->fetchAll(PDO::FETCH_ASSOC);
         document.getElementById('edit-weight').value = data.weight;
         document.getElementById('edit-warehouse').value = data.warehouse;
         document.getElementById('edit-remarks').value = data.remarks;
-        document.getElementById('edit-hin').checked = (data.hin == 1); // 【修改】設定領櫃 checkbox
+        document.getElementById('edit-hin').checked = (data.hin == 1); 
         document.getElementById('edit-status').value = data.status;
         openModal('editModal');
     }
