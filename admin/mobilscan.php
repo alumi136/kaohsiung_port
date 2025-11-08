@@ -1,6 +1,7 @@
 <?php
 // 檔案: mobilscan.php
-// v3: 處理分號 (house_no) 對應多個主號 (master_no) 的情況
+// v4: 1. 處理分號 (house_no) 對應多個主號 (master_no) 的情況
+//     2. 修正備註中的 "；" 為 " " (空格)
 
 session_start();
 require_once 'config.php';
@@ -27,7 +28,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
     $action_type = $_POST['action_type'] ?? '';
     $manual_remark = trim($_POST['manual_remark'] ?? '');
     
-    // 【修改】獲取使用者選擇的特定主號 (如果有的話)
     $selected_master_no = $_POST['selected_master_no'] ?? null;
 
     if (empty($scanned_value) || empty($action_type)) {
@@ -36,7 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
         $scanned_value_prefill = $scanned_value; // 保留錯誤的輸入
     } else {
         try {
-            // --- 準備資料 (這部分邏輯不變) ---
+            // --- 準備資料 ---
             $today = date('Y-m-d');
             $status0 = 0;
             $auto_remark = '';
@@ -48,15 +48,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                 case 'other': $status0 = 7; $auto_remark = $today; break;
             }
 
+            // 【*** 程式碼修改處：備註符號 ***】
+            // 將 "； " (全形分號+空格) 改為 " " (單純空格)
             $final_remark = $auto_remark;
             if (!empty($manual_remark)) {
-                $final_remark .= (empty($final_remark) ? '' : '； ') . $manual_remark;
+                $final_remark .= (empty($final_remark) ? '' : ' ') . $manual_remark;
             }
+            // 【*** 修改結束 ***】
+
 
             $pdo->beginTransaction();
             $skip_commit = false;
 
-            // --- 【*** 核心邏輯修改：檢查是否有 selected_master_no ***】 ---
+            // --- 檢查是否有 selected_master_no ---
             
             if (!empty($selected_master_no)) {
                 
@@ -207,6 +211,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                 <input type="hidden" name="action_type" value="<?php echo htmlspecialchars($action_type_prefill); ?>">
                 <input type="hidden" name="manual_remark" value="<?php echo htmlspecialchars($manual_remark_prefill); ?>">
             <?php endif; ?>
+
+
             <div id="action-selection-container" class="space-y-6 <?php if (!empty($master_no_choices)) echo 'hidden'; ?>">
                 <div>
                     <label for="action_type" class="block text-base font-medium text-gray-700 mb-2">處理方式</label>
@@ -224,6 +230,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                     <input type="text" name="manual_remark" id="manual_remark" class="form-input" placeholder="可輸入額外說明..." maxlength="40" value="<?php echo htmlspecialchars($manual_remark_prefill); ?>" <?php if (!empty($master_no_choices)) echo 'disabled'; ?>>
                 </div>
             </div>
+
+
             <div class="pt-4">
                 <button type="submit" class="btn bg-green-600 hover:bg-green-700">
                     <?php echo (!empty($master_no_choices)) ? '確認並送出' : '執行處理'; ?>
@@ -235,7 +243,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
     <script type="text/javascript" src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
     <script type="text/javascript">
         window.addEventListener('load', function () {
-            // ... (JS 邏輯與您提供的版本相同，此處未修改) ...
             const codeReader = new ZXing.BrowserMultiFormatReader();
             const startButton = document.getElementById('startButton');
             const startButtonText = document.getElementById('startButtonText');
@@ -246,7 +253,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
             const form = document.getElementById('main-form');
             let isScanning = false;
 
-            // 【*** 修改：如果正在選擇主號，禁止掃描 ***】
             const isChoosingMaster = <?php echo !empty($master_no_choices) ? 'true' : 'false'; ?>;
             if (isChoosingMaster) {
                 startButton.disabled = true;
@@ -255,7 +261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
             }
 
             function startScan() {
-                if (isChoosingMaster) return; // 如果在選擇主號，禁止啟動
+                if (isChoosingMaster) return; 
                 if(messageBox) messageBox.style.display = 'none';
                 statusText.textContent = "正在請求相機權限...";
                 scannerContainer.classList.remove('hidden');

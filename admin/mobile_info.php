@@ -1,7 +1,6 @@
 <?php
 // 檔案: mobile_info.php
-// 說明: 查詢由 mobilscan.php 或 update.php 執行過的中段操作紀錄 (以 daily_outbound.customer_name 為準)
-// v3: 將所有 created_at 相關邏輯，全部改為 mobile_time
+// v4: 1. 僅顯示 主號, 分號, 備註, 操作人, 操作時間。 2. 同步修改 CSV。
 
 session_start();
 
@@ -49,7 +48,7 @@ if ($is_default_load) {
     $end_date = date('Y-m-d');
 }
 
-// 分頁設定 (同 abnormal.php)
+// 分頁設定
 $records_per_page = 30;
 $current_page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
 $offset = ($current_page - 1) * $records_per_page;
@@ -83,38 +82,29 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
     $output = fopen('php://output', 'w');
     fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM
 
-    // 【*** 邏輯修改 ***】 標籤 "建立時間" -> "操作時間"
+    // 【*** 程式碼修改處 #1：CSV 標頭 ***】
     $headers = [
-        '主號', '分號', '總件數', '已進倉件數', '已出倉件數',
-        '通關方式', '進倉日期時間', '出倉日期時間', '操作時間',
-        '操作人', '備註 (remark)', '狀態 (status0)'
+        '主號', '分號', '備註 (remark)', '操作人', '操作時間',
     ];
     fputcsv($output, $headers);
 
 
-    // --- 構建查詢條件 (與下方 HTML 查詢邏輯一致) ---
-    // 【*** 邏輯修改 ***】 created_at -> mobile_time
-    $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "mobile_time IS NOT NULL"]; // 基本條件
+    // --- 構建查詢條件 ---
+    $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "mobile_time IS NOT NULL"];
     $params_for_where = [];
 
-    // 條件 1: 日期 (必選)
-    // 【*** 邏輯修改 ***】 created_at -> mobile_time
     $where_clauses[] = "mobile_time BETWEEN ? AND ?";
     $params_for_where[] = $start_date . " 00:00:00";
     $params_for_where[] = $end_date . " 23:59:59";
 
-    // 條件 2: 操作人 (選填)
     if (!empty($selected_operator)) {
         $where_clauses[] = "customer_name = ?";
         $params_for_where[] = $selected_operator;
     }
 
-    // --- 執行查詢 ---
-    // 【*** 邏輯修改 ***】 created_at -> mobile_time
+    // 【*** 程式碼修改處 #2：CSV SQL 查詢欄位 ***】
     $sql = "SELECT
-                master_no, house_no, total_packages, packages_in, packages_out,
-                clearance_method, storage_in_datetime, storage_out_datetime,
-                mobile_time, customer_name, remark, status0
+                master_no, house_no, remark, customer_name, mobile_time
             FROM
                 daily_outbound
             WHERE
@@ -127,19 +117,13 @@ if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
         $stmt->execute($params_for_where);
         
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+             // 【*** 程式碼修改處 #3：CSV 寫入資料 ***】
              $csv_row = [
                 $row['master_no'],
                 $row['house_no'],
-                $row['total_packages'],
-                $row['packages_in'],
-                $row['packages_out'],
-                $row['clearance_method'],
-                $row['storage_in_datetime'],
-                $row['storage_out_datetime'],
-                $row['mobile_time'], // 【*** 邏輯修改 ***】
-                $row['customer_name'],
                 $row['remark'],
-                $row['status0']
+                $row['customer_name'],
+                $row['mobile_time']
              ];
              fputcsv($output, $csv_row);
         }
@@ -168,24 +152,20 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
     // 只有在驗證通過時才執行查詢
     if (empty($user_message)) {
         try {
-            // --- 構建查詢條件 (與上方 CSV 匯出邏輯一致) ---
-            // 【*** 邏輯修改 ***】 created_at -> mobile_time
+            // --- 構建查詢條件 ---
             $where_clauses = ["customer_name IS NOT NULL AND customer_name != ''", "mobile_time IS NOT NULL"];
             $params_for_where = [];
 
-            // 條件 1: 日期 (必選)
-            // 【*** 邏輯修改 ***】 created_at -> mobile_time
             $where_clauses[] = "mobile_time BETWEEN ? AND ?";
             $params_for_where[] = $start_date . " 00:00:00";
             $params_for_where[] = $end_date . " 23:59:59";
 
-            // 條件 2: 操作人 (選填)
             if (!empty($selected_operator)) {
                 $where_clauses[] = "customer_name = ?";
                 $params_for_where[] = $selected_operator;
             }
 
-            // --- 執行 COUNT 查詢 (同 abnormal.php) ---
+            // --- 執行 COUNT 查詢 ---
             $count_sql = "SELECT COUNT(*) FROM daily_outbound WHERE " . implode(' AND ', $where_clauses);
             $count_stmt = $pdo->prepare($count_sql);
             $count_stmt->execute($params_for_where);
@@ -196,12 +176,9 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
             $current_page = min($current_page, $total_pages > 0 ? $total_pages : 1);
             $offset = ($current_page - 1) * $records_per_page; if ($offset < 0) $offset = 0;
 
-            // --- 執行資料查詢 (同 abnormal.php) ---
-            // 【*** 邏輯修改 ***】 created_at -> mobile_time
+            // 【*** 程式碼修改處 #4：HTML SQL 查詢欄位 ***】
             $sql = "SELECT
-                        master_no, house_no, total_packages, packages_in, packages_out,
-                        clearance_method, storage_in_datetime, storage_out_datetime,
-                        mobile_time, customer_name, remark, status0
+                        master_no, house_no, remark, customer_name, mobile_time
                     FROM daily_outbound 
                     WHERE " . implode(' AND ', $where_clauses) . " 
                     ORDER BY mobile_time DESC, master_no ASC, house_no ASC 
@@ -211,7 +188,7 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
             $stmt->execute($final_query_params);
             $report_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // 根據是否為預設載入修改提示訊息
+            // 提示訊息
             $query_source_log = $is_default_load ? "預設查詢當日" : json_encode($_GET);
             $query_source_msg = $is_default_load ? "預設顯示當日資料。" : "";
 
@@ -322,16 +299,9 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
                                 <tr>
                                     <th>主號</th>
                                     <th>分號</th>
-                                    <th>總件數</th>
-                                    <th>已進倉件數</th>
-                                    <th>已出倉件數</th>
-                                    <th>通關方式</th>
-                                    <th>進倉日期時間</th>
-                                    <th>出倉日期時間</th>
-                                    <th>操作時間</th>
-                                    <th>操作人</th>
                                     <th>備註 (remark)</th>
-                                    <th>狀態 (status0)</th>
+                                    <th>操作人</th>
+                                    <th>操作時間</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-100">
@@ -339,16 +309,9 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
                                 <tr>
                                     <td><?php echo htmlspecialchars($row['master_no'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($row['house_no'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['total_packages'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['packages_in'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['packages_out'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['clearance_method'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['storage_in_datetime'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['storage_out_datetime'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['mobile_time'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($row['customer_name'] ?? ''); ?></td>
                                     <td class="whitespace-normal break-words max-w-xs"><?php echo nl2br(htmlspecialchars($row['remark'] ?? '')); ?></td>
-                                    <td><?php echo htmlspecialchars($row['status0'] ?? ''); ?></td>
+                                    <td><?php echo htmlspecialchars($row['customer_name'] ?? ''); ?></td>
+                                    <td><?php echo htmlspecialchars($row['mobile_time'] ?? ''); ?></td>
                                 </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -400,9 +363,9 @@ if (($_SERVER["REQUEST_METHOD"] == "GET" && isset($_GET['query_report'])) || $is
                         <?php endif; ?>
                     </div>
                 </div>
-            <?php elseif ((isset($_GET['query_report']) || $is_default_load) && empty($user_message)): // 即使是預設載入，如果沒資料也顯示提示 ?>
+            <?php elseif ((isset($_GET['query_report']) || $is_default_load) && empty($user_message)): ?>
                 <div class="bg-blue-100 text-blue-800 p-6 rounded-lg text-base">
-                    <p>沒有找到符合您查詢條件的操作資料。</p>
+                    <td colspan="5" class="px-4 py-4 text-center text-gray-500">沒有找到符合您查詢條件的操作資料。</td>
                 </div>
             <?php endif; ?>
         </main>
