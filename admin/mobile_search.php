@@ -15,7 +15,7 @@ $search_results = [];
 $error_message = '';
 $scanned_value = ''; // 用於回填表單
 
-// 處理查詢請求
+// 處理查詢請求 (來自 POST)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
     $scanned_value = trim($_POST['scanned_value']);
 
@@ -23,14 +23,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
         $error_message = '錯誤：掃描內容不能為空。';
     } else {
         try {
-            // 準備查詢 (使用 search.php 的單筆查詢邏輯)
-            $sql = "SELECT status, master_no, house_no, total_packages, packages_in, packages_out, storage_in_datetime, storage_out_datetime
+            // SQL 查詢 (已包含 remark)
+            $sql = "SELECT status, master_no, house_no, total_packages, packages_in, packages_out, storage_in_datetime, storage_out_datetime, remark
                     FROM daily_outbound
                     WHERE house_no = ?";
             
             $stmt = $pdo->prepare($sql);
             $stmt->execute([$scanned_value]);
-            $search_results = $stmt->fetchAll(PDO::FETCH_ASSOC); // 獲取所有符合的紀錄 (需求 #2)
+            $search_results = $stmt->fetchAll(PDO::FETCH_ASSOC); // 獲取所有符合的紀錄
 
             if (count($search_results) === 0) {
                 $error_message = "找不到符合分號 '" . htmlspecialchars($scanned_value) . "' 的資料。";
@@ -70,7 +70,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
         .btn { 
             @apply w-full px-4 py-4 text-xl font-bold text-white rounded-lg shadow-md transform active:scale-95 transition-all duration-200;
         }
-        /* 查詢結果的樣式 (仿 search.php) */
         .result-grid { display: grid; grid-template-columns: 120px 1fr; gap: 0.5rem; }
         .result-grid dt { font-weight: 600; color: #4A5568; text-align: right; padding-right: 0.5rem; }
         .result-grid dd { color: #1A202C; word-break: break-all; }
@@ -105,7 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
             <div class="pt-4">
                 <button type="submit" name="search_submit" class="btn bg-green-600 hover:bg-green-700">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                    執行查詢
+                    執行查詢 (或手動輸入後點擊)
                 </button>
             </div>
         </form>
@@ -130,7 +129,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                         <dd class="font-bold <?php echo (isset($row['status']) && $row['status'] == '已通關出倉') ? 'text-green-600' : 'text-red-600'; ?>">
                             <?php echo htmlspecialchars($row['status'] ?? 'N/A'); ?>
                         </dd>
-                        
                         <dt>主號:</dt> <dd><?php echo htmlspecialchars($row['master_no'] ?? 'N/A'); ?></dd>
                         <dt>分號:</dt> <dd><?php echo htmlspecialchars($row['house_no'] ?? 'N/A'); ?></dd>
                         <dt>總件數:</dt> <dd><?php echo htmlspecialchars($row['total_packages'] ?? 'N/A'); ?></dd>
@@ -138,6 +136,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                         <dt>已出倉件數:</dt> <dd><?php echo htmlspecialchars($row['packages_out'] ?? 'N/A'); ?></dd>
                         <dt>進倉日期時間:</dt> <dd><?php echo htmlspecialchars($row['storage_in_datetime'] ?? 'N/A'); ?></dd>
                         <dt>出倉日期時間:</dt> <dd><?php echo htmlspecialchars($row['storage_out_datetime'] ?? 'N/A'); ?></dd>
+                        <dt>備註:</dt> 
+                        <dd>
+                            <?php echo nl2br(htmlspecialchars($row['remark'] ?? 'N/A')); ?>
+                        </dd>
                     </dl>
                 </div>
                 <?php endforeach; ?>
@@ -163,6 +165,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
             const scannedValueTextarea = document.getElementById('scanned_value');
             const statusText = document.getElementById('status-text');
             const messageBox = document.getElementById('message-box');
+            
+            // 【*** 修改 #1：獲取表單元素 ***】
+            const form = document.getElementById('main-form');
+            
             let isScanning = false;
 
             function startScan() {
@@ -185,9 +191,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                                 // 掃描成功後立刻關閉相機
                                 stopScan(); 
                                 
+                                // 1. 填入數值
                                 scannedValueTextarea.value = result.text;
                                 
-                                statusText.innerHTML = `<span class="font-bold text-blue-600">掃描成功 (${result.text})</span>`;
+                                // 2. 更新提示文字
+                                statusText.innerHTML = `<span class="font-bold text-blue-600">掃描成功 (${result.text})，正在查詢...</span>`;
                                 
                                 // 播放提示音
                                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -197,6 +205,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                                 oscillator.frequency.setValueAtTime(900, audioContext.currentTime);
                                 oscillator.start();
                                 oscillator.stop(audioContext.currentTime + 0.1);
+                                
+                                // 3. 【*** 修改 #2：自動提交表單 ***】
+                                form.submit();
                             }
                             if (err && !(err instanceof ZXing.NotFoundException)) {
                                 console.error(err);
@@ -229,7 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                 }
             });
             
-            // 檢查 HTTPS (同 mobilscan.php)
+            // 檢查 HTTPS
             if (window.location.protocol !== "https:" && window.location.hostname !== "localhost") {
                 statusText.innerHTML = "<b>警告：</b>此功能需要在 HTTPS 安全連線下才能啟動相機。";
                 statusText.classList.add('text-yellow-600');

@@ -165,7 +165,7 @@ try {
                     <span class="icon">📱</span> 手機掃碼
                 </a>
                 <a href="mobile_search.php" class="sidebar-link" onclick="window.open(this.href, 'SearchWindow', 'width=500,height=800,scrollbars=yes,resizable=yes'); return false;">
-                    <span class="icon">📱</span> 手機查詢已申未進
+                    <span class="icon">📱</span> 手機查詢狀態
                 </a>
                 <a href="account.php" class="sidebar-link" target="contentFrame">
                     <span class="icon">👤</span> 帳號管理
