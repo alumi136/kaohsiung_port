@@ -164,6 +164,9 @@ try {
                 <a href="mobilscan.php" class="sidebar-link" onclick="window.open(this.href, 'ScanWindow', 'width=500,height=800,scrollbars=yes,resizable=yes'); return false;">
                     <span class="icon">📱</span> 手機掃碼
                 </a>
+                <a href="mobile_info.php" class="sidebar-link" target="contentFrame">
+                    <span class="icon pl-5">➡️</span> 中段操作查詢
+                </a>
                 <a href="mobile_search.php" class="sidebar-link" onclick="window.open(this.href, 'SearchWindow', 'width=500,height=800,scrollbars=yes,resizable=yes'); return false;">
                     <span class="icon">📱</span> 手機查詢狀態
                 </a>
