@@ -1,9 +1,11 @@
 <?php
 // ☆☆☆☆ 這是一個 CLI (命令列介面) 腳本 ☆☆☆☆
-// 任務 (完整 ETL 流程):
+// 任務 (ETL 流程 - v38):
 // 1. (Extract) 從 Google Drive 下載 Excel 檔案，寫入 daily_outbound。
-// 2. (Transform) 清理 daily_outbound 中的重複資料，確保其唯一性與完整性。
-// 3. (Load) 將清理後的 daily_outbound 資料彙總統計，更新至 daily_arrange 總表。
+// 2. (Load) 將 daily_outbound 資料彙總統計，更新至 daily_arrange 總表。
+//
+// **注意: 此版本已移除內建的重複資料合併(Transform)邏輯。**
+// **系統依賴外部的 SQL 事件 (例如 21:10 的合併 和 21:20 的刪除) 來處理 daily_outbound 的資料唯一性。**
 
 set_time_limit(5400); // 增加腳本最大執行時間至 1.5 小時 (增加的等待時間)
 ini_set('memory_limit', '512M');
@@ -94,7 +96,7 @@ function moveFileOnDrive(Google_Service_Drive $service, string $fileId, string $
 
 
 // --- 核心處理邏輯 ---
-write_log("==== Original files ETL cron job started (v37 - Syntax Fix). ====");
+write_log("==== Original files ETL cron job started (v38 - Merge/Delete Removed). ====");
 $files_were_processed = false;
 
 try {
@@ -170,7 +172,7 @@ try {
         }
     }
 
-    // --- 步驟 2 & 3: (Transform & Load) 在所有檔案處理完畢後，執行資料清理與彙總程序 ---
+    // --- 步驟 2: (Load) 在所有檔案處理完畢後，執行資料彙總程序 ---
     if ($files_were_processed) {
         write_log("所有檔案匯入完成，準備開始執行資料後處理程序...");
 
@@ -179,26 +181,19 @@ try {
         $conn_cleanup->set_charset("utf8mb4");
 
         try {
-            // --- Transform Part 1: 合併重複資料 ---
-            write_log("等待 180 秒 (3分鐘)，確保資料庫同步...");
-            sleep(180);
-            write_log("步驟 1/3: 正在合併重複資料，創建黃金紀錄...");
-            // 【*** 關鍵SQL: 修正此處的語法錯誤 (已移除多餘的 ')' ) ***】
-            // 【*** v2: 加入 mobile_time 欄位 ***】
-            $sql_update_golden = "UPDATE daily_outbound AS t_to_update JOIN (SELECT t_max_id.max_id, COALESCE(t_newest.declaration_no, MAX(t_all.declaration_no)) AS final_declaration_no, COALESCE(t_newest.master_no, MAX(t_all.master_no)) AS final_master_no, COALESCE(t_newest.house_no, MAX(t_all.house_no)) AS final_house_no, COALESCE(t_newest.weight, MAX(t_all.weight)) AS final_weight, COALESCE(t_newest.total_packages, MAX(t_all.total_packages)) AS final_total_packages, COALESCE(t_newest.packages_in, MAX(t_all.packages_in)) AS final_packages_in, COALESCE(t_newest.packages_out, MAX(t_all.packages_out)) AS final_packages_out, COALESCE(t_newest.clearance_method, MAX(t_all.clearance_method)) AS final_clearance_method, COALESCE(t_newest.declaration_type, MAX(t_all.declaration_type)) AS final_declaration_type, COALESCE(t_newest.carrier_id, MAX(t_all.carrier_id)) AS final_carrier_id, COALESCE(t_newest.route, MAX(t_all.route)) AS final_route, COALESCE(t_newest.customer_name, MAX(t_all.customer_name)) AS final_customer_name, COALESCE(t_newest.mobile_time, MAX(t_all.mobile_time)) AS final_mobile_time, GROUP_CONCAT(DISTINCT CASE WHEN t_all.remark IS NOT NULL AND t_all.remark != '' THEN t_all.remark END SEPARATOR '; ') AS final_remark, MAX(t_all.status0) AS final_status0, MAX(t_all.storage_in_datetime) AS final_storage_in_datetime, MAX(t_all.release_datetime) AS final_release_datetime, MAX(t_all.storage_out_datetime) AS unconditional_storage_out_datetime FROM (SELECT master_no, house_no, MAX(id) as max_id FROM daily_outbound GROUP BY master_no, house_no HAVING COUNT(*) > 1) AS t_max_id JOIN daily_outbound AS t_all ON t_all.master_no = t_max_id.master_no AND t_all.house_no = t_max_id.house_no JOIN daily_outbound AS t_newest ON t_newest.id = t_max_id.max_id GROUP BY t_max_id.master_no, t_max_id.house_no, t_max_id.max_id ) AS t_source ON t_to_update.id = t_source.max_id SET t_to_update.declaration_no = t_source.final_declaration_no, t_to_update.master_no = t_source.final_master_no, t_to_update.house_no = t_source.final_house_no, t_to_update.weight = t_source.final_weight, t_to_update.total_packages = t_source.final_total_packages, t_to_update.packages_in = t_source.final_packages_in, t_to_update.packages_out = t_source.final_packages_out, t_to_update.clearance_method = t_source.final_clearance_method, t_to_update.declaration_type = t_source.final_declaration_type, t_to_update.carrier_id = t_source.final_carrier_id, t_to_update.route = t_source.final_route, t_to_update.customer_name = t_source.final_customer_name, t_to_update.mobile_time = t_source.final_mobile_time, t_to_update.remark = t_source.final_remark, t_to_update.status0 = t_source.final_status0, t_to_update.storage_in_datetime = t_source.final_storage_in_datetime, t_to_update.release_datetime = t_source.final_release_datetime, t_to_update.storage_out_datetime = CASE WHEN t_source.final_total_packages = t_source.final_packages_in AND t_source.final_total_packages = t_source.final_packages_out AND t_source.final_total_packages > 0 THEN t_source.unconditional_storage_out_datetime ELSE NULL END";
-            if ($conn_cleanup->query($sql_update_golden) === TRUE) { write_log("步驟 1/3 成功: " . $conn_cleanup->affected_rows . " 筆黃金紀錄已更新。"); } else { throw new Exception("步驟 1/3 失敗: " . $conn_cleanup->error); }
+            // --- 【已移除】步驟 1/3: 合併重複資料 ---
+            // write_log("步驟 1/3: 正在合併重複資料，創建黃金紀錄...");
+            // (相關 $sql_update_golden 和 query 已被移除)
 
-            // --- Transform Part 2: 刪除舊的重複資料 ---
-            write_log("等待 180 秒 (3分鐘)，確保更新操作完成...");
-            sleep(180);
-            write_log("步驟 2/3: 正在刪除舊的重複資料...");
-            $sql_delete_duplicates = "DELETE t1 FROM daily_outbound t1 INNER JOIN (SELECT master_no, house_no, MAX(id) as max_id FROM daily_outbound WHERE master_no IS NOT NULL AND master_no != '' AND house_no IS NOT NULL AND house_no != '' GROUP BY master_no, house_no HAVING COUNT(*) > 1) t2 ON t1.master_no = t2.master_no AND t1.house_no = t2.house_no AND t1.id < t2.max_id";
-            if ($conn_cleanup->query($sql_delete_duplicates) === TRUE) { write_log("步驟 2/3 成功: " . $conn_cleanup->affected_rows . " 筆舊的重複資料已刪除。"); } else { throw new Exception("步驟 2/3 失敗: " . $conn_cleanup->error); }
+            // --- 【已移除】步驟 2/3: 刪除舊的重複資料 ---
+            // write_log("步驟 2/3: 正在刪除舊的重複資料...");
+            // (相關 $sql_delete_duplicates 和 query 已被移除)
 
             // --- 步驟 3/3: (Load) 更新 daily_arrange 總表 ---
+            // **注意**: 此步驟假定外部的合併/刪除 SQL 事件已經執行完畢
             write_log("等待 180 秒 (3分鐘)，準備更新排櫃總表...");
             sleep(180);
-            write_log("步驟 3/3: G正在從 daily_outbound 彙總資料並更新至 daily_arrange...");
+            write_log("步驟 (Load): 正在從 daily_outbound 彙總資料並更新至 daily_arrange...");
             // 【最新修改】在此 SQL 的子查詢中加入排除 status0 = 8 的條件
             $sql_update_arrange = "
             UPDATE
@@ -236,12 +231,12 @@ try {
                 da.release_datetime = stats.calculated_release_datetime";
             
             if ($conn_cleanup->query($sql_update_arrange) === TRUE) {
-                write_log("步驟 3/3 成功: " . $conn_cleanup->affected_rows . " 筆排櫃總表紀錄已更新。");
+                write_log("步驟 (Load) 成功: " . $conn_cleanup->affected_rows . " 筆排櫃總表紀錄已更新。");
             } else {
-                throw new Exception("步驟 3/3 失敗: " . $conn_cleanup->error);
+                throw new Exception("步驟 (Load) 失敗: " . $conn_cleanup->error);
             }
 
-            write_log("資料後處理程序成功執行完畢。");
+            write_log("排櫃總表(Arrange)更新程序成功執行完畢。");
 
         } catch (Exception $e) {
             write_log("嚴重錯誤：在執行資料後處理程序時發生例外: " . $e->getMessage());
