@@ -2,6 +2,7 @@
 // 檔案: mobilscan.php
 // v4: 1. 處理分號 (house_no) 對應多個主號 (master_no) 的情況
 //     2. 修正備註中的 "；" 為 " " (空格)
+// v5: 新增 "待實名" 選項 (status0 = 9)
 
 session_start();
 require_once 'config.php';
@@ -45,6 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                 case 'order_screenshot': $status0 = 2; $auto_remark = "{$today} 要提供訂單截圖"; break;
                 case 'formal_declaration': $status0 = 1; $auto_remark = "{$today} 轉正報"; break;
                 case 'missing_package': $status0 = 8; $auto_remark = "{$today} 漏件"; break;
+                case 'waiting_realname': $status0 = 9; $auto_remark = "{$today} 待實名"; break; // 【新增】待實名邏輯
                 case 'other': $status0 = 7; $auto_remark = $today; break;
             }
 
@@ -221,7 +223,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scanned_value'])) {
                         <option value="order_screenshot" <?php echo ($action_type_prefill == 'order_screenshot') ? 'selected' : ''; ?>>提供訂單截圖</option>
                         <option value="formal_declaration" <?php echo ($action_type_prefill == 'formal_declaration') ? 'selected' : ''; ?>>轉正報</option>
                         <option value="missing_package" <?php echo ($action_type_prefill == 'missing_package') ? 'selected' : ''; ?>>漏件</option>
-                        <option value="other" <?php echo ($action_type_prefill == 'other') ? 'selected' : ''; ?>>其他</option>
+                        <option value="waiting_realname" <?php echo ($action_type_prefill == 'waiting_realname') ? 'selected' : ''; ?>>待實名</option> <option value="other" <?php echo ($action_type_prefill == 'other') ? 'selected' : ''; ?>>其他</option>
                     </select>
                 </div>
 
