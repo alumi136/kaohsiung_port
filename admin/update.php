@@ -156,6 +156,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                     case 'formal_declaration': $remark_content = "轉正報"; if ($update_status0) { $update_fields[] = "status0 = 1"; } break;
                                     case 'abandon': $remark_content = "放棄"; if ($update_status0) { $update_fields[] = "status0 = 6"; } break;
                                     case 'seized': $remark_content = "查扣"; if ($update_status0) { $update_fields[] = "status0 = 5"; } break;
+                                    case 'wait_realname': $remark_content = "待實名"; if ($update_status0) { $update_fields[] = "status0 = 9"; } break; // 新增待實名邏輯
                                     case 'other': $remark_content = ""; if ($update_status0) { $update_fields[] = "status0 = 7"; } break;
                                 }
                                 $new_remark_part = $today_str . (!empty($remark_content) ? " " . $remark_content : "") . (!empty($user_remark) ? " - " . $user_remark : "");
@@ -173,6 +174,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                     case 'formal_declaration': $remark_content = "轉正報"; $status0_to_set = 1; break;
                                     case 'abandon': $remark_content = "放棄"; $status0_to_set = 6; break;
                                     case 'seized': $remark_content = "查扣"; $status0_to_set = 5; break;
+                                    case 'wait_realname': $remark_content = "待實名"; $status0_to_set = 9; break; // 新增待實名邏輯
                                     case 'other': $remark_content = ""; $status0_to_set = 7; break;
                                 }
                                 $new_remark = $today_str . (!empty($remark_content) ? " " . $remark_content : "") . (!empty($user_remark) ? " - " . $user_remark : "");
@@ -289,6 +291,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                     'formal_declaration' => '轉正報',
                                     'abandon' => '放棄',
                                     'seized' => '查扣',
+                                    'wait_realname' => '待實名', // 新增待實名選項
                                     'shortage' => '短卸',
                                     'other' => '其他'
                                 ];
@@ -359,4 +362,3 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     </script>
 </body>
 </html>
-
