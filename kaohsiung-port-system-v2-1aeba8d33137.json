@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "kaohsiung-port-system-v2",
+  "private_key_id": "1aeba8d331370b48567adda1921c11d7ada62f63",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCy0mjPqkD82EAM\nlbhHBqexLq+gdwZm7qpNpwLZmiqqotgQjSbAit8AlTDRDfCBXb99ATyyzqQvCPB2\ncAHsSDtwpll1jXc7Hm5GvKcUN/o8JGIhDQci9qs1fzDOxhvm1kqQ2HItSKU0PGGG\nT6++rB1pAft3B5WtdCrkBq5LuJS1AGTD/mljiyI12hueF4ZY7z2kPh/OGr+vA8SP\nF1vwqiu8aMBRP+X4VLJi+iC1/y17VMvAginpi6vgazLqUTVuWdw5vbbjhH/QIC9C\nzRpOos9DBtUdyoDi/W56Eb+DRjyVdbJUGS13i6kHfS94NrAjvYeRB5ib84JiU2ax\nMj/q5LtDAgMBAAECggEAQU1/gx68ntlmAnKGmkF+6cCP2Hy+9MYBoVv1OXwISsov\nN1Qkq7nLGE5jRmTdyJBwxni2LuIxqQ+NqOLcgOob8tZ84uXnfcpuIRzxsvuCQYZT\n45f7XDRSb7XkIA7Oz6zADEdO4uSdmAbY4pClMG9wShG0QFKfwXkj1KPv8K0WeUZv\nQYvGH6CyXh+LTg0b8ijP27DYZXN2AIFD7d9ehmbPqCD1h/HiiJ9dzFy5QEYyNjiW\nkt9x+IFvWLOJq1SURPvwYmedBk2HW2e6SdUnH1QELH53QcIoJ/0FtB14YMpK/so7\nM+czZL80jW4s9Kcl5K18GJzsmLl+owK9VKqaYiDJoQKBgQDvhoQvhIlZCXjWrOw4\nPF14vJrs99eHO/Xin6NYJcdWbRZB3ytDVqDegcs0sKoXCa8Z7rG+NRPn7jpP+HA8\n48XPHPXGqUIuQ+GEPRKOM1AuLlK3civWTFzmGr7tAMEU9GvXjK9vfivHD4MseAnT\nLs76pJVMqEa7jO7wt/2qqwnokQKBgQC/HwumHZ2c5wDTKB+dJTb8z2m8ZCHU8KOp\nUTHidu+lpZKMYlzq0+m70Ln4YtNwyEfS9pPxuOcNvW0dXCgmW/XrpmcOKwVywCS4\nt/iOODDzgLtOf2Va84DMpZZP5wc6FGXrcVVyleawFX3BuLtmMfDXiqMfxKxjQ88E\nGAiTs4kwkwKBgHbK2Q4UBmZRK0wU8Qam8ZiquY9jD9JzK2yczc8u1WEIsywyOWup\nMBmKd7SHFaRdWilbV23FNz0kymjVBx07veQNMdu4ICl/4v3JqEU8L7znnoB6sEEV\nGFHK2/wBDsGMw1tg27VI9v8/s0e/tOe25FIshBtDrejgabSbG8SkFULxAoGAHttP\nUSmU6eEt8+mVeRSqFRUTuDPednfHpK2URUD4niDmUT4MTGmcYhNoAx9Jjfr4BaqD\n5lH5E/HSbRwU62SLhtld6B6wCX/WLfCd87BEzvuowhq1bYLE98WASDQ/qXPjpKiu\nqAplrWY64I0HzI8hmFsszRM+1eP7x2ht8hLZgnsCgYEAxmLoasBcnaFYBbILjvyL\nQf1n2ZiBwPy24w/9z9HnNBSTYQySWN4Z/PqeR2YgB8lNRBBQhNLWbcyOWUL6cMzT\nbXNA4tD/YtTxJ+/BgvffWqnkMx844HKkN7pES8NV6TvZeeiEgEVxw3xszh2+IBtd\nQ0Mcv/9QDAoP/P1A09fKhzo=\n-----END PRIVATE KEY-----\n",
+  "client_email": "drive-importer@kaohsiung-port-system-v2.iam.gserviceaccount.com",
+  "client_id": "104060944198114781135",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/drive-importer%40kaohsiung-port-system-v2.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
