@@ -5,7 +5,7 @@ header('Content-Type: application/json; charset=utf-8');
 // 檢查請求方法是否為 POST
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     // --- 設定 ---
-    $to = "jason_lee"; 
+    $to = "jason_lee@galloptek.com, david.aaf49@gmail.com"; 
     
     // --- 清理並獲取表單資料 ---
     $name = filter_input(INPUT_POST, 'name', FILTER_SANITIZE_STRING);
