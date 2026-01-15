@@ -148,7 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
                     <h5 class="mb-0">導入貨物清單 (.csv, .xls, .xlsx)</h5>
                 </div>
                 <div class="card-body">
-                    <form action="admin.php" method="POST" enctype="multipart/form-data">
+                    <form action="sunrise.php" method="POST" enctype="multipart/form-data">
                         <div class="mb-3">
                             <label class="form-label">設定貨櫃批號 (Lot No.)</label>
                             <input type="text" name="lot_no" class="form-control" placeholder="例如: 6778-15" required>
