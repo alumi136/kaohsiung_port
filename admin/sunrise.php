@@ -12,7 +12,7 @@ error_reporting(E_ALL);
 
 // --- 檢查 Composer 套件 ---
 if (file_exists('vendor/autoload.php')) {
-    require 'vendor/autoload.php';
+    require '/var/www/html/excel/vendor/autoload.php';
 } else {
     die("<div style='color:red; padding:20px; border:1px solid red;'>
         <strong>系統錯誤：</strong> 找不到 'vendor/autoload.php'。<br>
