@@ -11,7 +11,7 @@ ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
 // --- 檢查 Composer 套件 ---
-if (file_exists('vendor/autoload.php')) {
+if (file_exists('/var/www/html/excel/vendor/autoload.php')) {
     require '/var/www/html/excel/vendor/autoload.php';
 } else {
     die("<div style='color:red; padding:20px; border:1px solid red;'>
