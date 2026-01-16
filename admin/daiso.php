@@ -1,78 +1,142 @@
 <?php
 /**
- * 大創貨物分揀系統 - 手機端 v5.2 (Debug Mode)
- * 修正: 加入 Port 設定, JSON 錯誤處理
+ * 大創貨物分揀系統 - 現場作業端 (Daiso Operation) v8.0
+ * 功能: 掃描分揀、防呆告警、溢卸處理、棧板管理
  */
 
-// --- 1. 資料庫連線配置 (含 Port) ---
-$host = '127.0.0.1';
-$port = '3306';      // <--- 確保與 admin.php 一致
-$db   = 'sunrise';
-$user = 'alumi136';
-$pass = 'Alumi!36';
-
-$dsn = "mysql:host=$host;port=$port;dbname=$db;charset=utf8mb4";
-$options = [
-    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-];
+// --- 1. 資料庫連線 ---
+$host = '127.0.0.1'; $port = '3306'; $db = 'sunrise'; $user = 'alumi136'; $pass = 'Alumi!36';
 
 try {
-    $pdo = new PDO($dsn, $user, $pass, $options);
+    $pdo = new PDO("mysql:host=$host;port=$port;dbname=$db;charset=utf8mb4", $user, $pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
 } catch (PDOException $e) {
-    // 若這裡是 AJAX 請求，回傳 JSON 錯誤；否則顯示文字
+    // 若是 AJAX 請求則回傳 JSON 錯誤，否則顯示文字
     if (isset($_POST['action'])) {
         header('Content-Type: application/json');
-        echo json_encode(['status' => 'error', 'msg' => 'DB連線失敗: ' . $e->getMessage()]);
+        echo json_encode(['status' => 'error', 'msg' => '資料庫連線失敗']); 
         exit;
-    } else {
-        die("資料庫連線失敗 (Port $port): " . $e->getMessage());
+    }
+    die("系統維護中 (DB Error)");
+}
+
+// ==========================================================
+//  AJAX API 處理區 (處理前端請求)
+// ==========================================================
+if (isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    $action = $_POST['action'];
+
+    // API: 取得該貨櫃的店鋪清單
+    if ($action == 'get_shops') {
+        $cid = $_POST['container_id'];
+        $sql = "SELECT DISTINCT shop_cd, shop_name FROM import_items WHERE container_id = ? ORDER BY shop_cd ASC";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$cid]);
+        echo json_encode($stmt->fetchAll());
+        exit;
+    }
+
+    // API: 執行掃描與驗證
+    if ($action == 'scan') {
+        $barcode = trim($_POST['barcode']);
+        $containerId = $_POST['container_id'];
+        $selectedShopCd = $_POST['shop_cd'];
+        $selectedPallet = $_POST['pallet_num'];
+        
+        try {
+            // 1. 查詢資料庫是否有此箱號
+            $stmt = $pdo->prepare("SELECT * FROM import_items WHERE container_id = ? AND carton_no = ? LIMIT 1");
+            $stmt->execute([$containerId, $barcode]);
+            $item = $stmt->fetch();
+
+            // --- 狀況 A: 資料庫找不到 (可能為溢卸) ---
+            if (!$item) {
+                echo json_encode([
+                    'status' => 'not_found',
+                    'msg' => '資料庫無此箱號'
+                ]);
+                exit;
+            }
+
+            // --- 狀況 B: 找到資料，檢查店鋪是否相符 ---
+            $correctShopName = $item['shop_name'];
+            $correctShopCd = $item['shop_cd'];
+
+            if ($correctShopCd != $selectedShopCd) {
+                // [需求 3] 錯分告警 -> 記錄為異常件 (scan_type = 2)
+                insertScanRecord($pdo, $containerId, $item['id'], $barcode, $selectedPallet, 2);
+
+                echo json_encode([
+                    'status' => 'warning',
+                    'msg' => "錯誤！此箱屬於：\n{$correctShopCd} {$correctShopName}\n(已記錄為異常件)",
+                    'log_str' => "棧板[$selectedPallet] $barcode (異常:錯分至 $correctShopName)"
+                ]);
+                exit;
+            }
+
+            // --- 狀況 C: 資料正確 ---
+            // 記錄為正常 (scan_type = 0)
+            insertScanRecord($pdo, $containerId, $item['id'], $barcode, $selectedPallet, 0);
+
+            echo json_encode([
+                'status' => 'success',
+                'msg' => "正確：{$correctShopName}",
+                'shop_name' => $correctShopName,
+                'log_str' => "棧板[$selectedPallet] $barcode $correctShopName"
+            ]);
+            exit;
+
+        } catch (Exception $e) {
+            echo json_encode(['status' => 'error', 'msg' => $e->getMessage()]); exit;
+        }
+    }
+
+    // API: 新增溢卸貨物
+    if ($action == 'add_overage') {
+        $barcode = trim($_POST['barcode']);
+        $containerId = $_POST['container_id'];
+        $selectedShopCd = $_POST['shop_cd'];
+        $selectedShopName = $_POST['shop_name']; 
+        $selectedPallet = $_POST['pallet_num'];
+
+        $pdo->beginTransaction();
+        try {
+            // [需求 4] 新增到 import_items (標記 is_overage=1)
+            // 因為是溢卸，我們假設 Box=1, Pcs=1 (或者您可以設為 0 待確認)
+            $stmt = $pdo->prepare("INSERT INTO import_items (container_id, shop_cd, shop_name, carton_no, box_qty, total_pcs, is_overage) VALUES (?, ?, ?, ?, 1, 1, 1)");
+            $stmt->execute([$containerId, $selectedShopCd, $selectedShopName, $barcode]);
+            $newItemId = $pdo->lastInsertId();
+
+            // 記錄掃描 (scan_type = 3 溢卸)
+            insertScanRecord($pdo, $containerId, $newItemId, $barcode, $selectedPallet, 3);
+
+            $pdo->commit();
+            echo json_encode([
+                'status' => 'success',
+                'msg' => "已新增溢卸貨物：{$selectedShopName}",
+                'log_str' => "棧板[$selectedPallet] $barcode $selectedShopName (溢卸)"
+            ]);
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            echo json_encode(['status' => 'error', 'msg' => '新增失敗: ' . $e->getMessage()]);
+        }
+        exit;
     }
 }
 
-// --- 2. 處理 AJAX 掃描請求 (加入 Try-Catch) ---
-if (isset($_POST['action']) && $_POST['action'] == 'scan') {
-    header('Content-Type: application/json'); // 強制設定 JSON Header
-    
-    try {
-        $carton_no = $_POST['carton_no'] ?? '';
-        $container_id = $_POST['container_id'] ?? '';
-        $is_damaged = ($_POST['is_damaged'] ?? 'false') === 'true' ? 1 : 0;
-
-        if (empty($carton_no) || empty($container_id)) {
-            throw new Exception("參數錯誤：箱號或貨櫃ID遺失");
-        }
-
-        // [節點] 查詢清單
-        $stmt = $pdo->prepare("SELECT * FROM import_items WHERE container_id = ? AND carton_no = ?");
-        $stmt->execute([$container_id, $carton_no]);
-        $item = $stmt->fetch();
-
-        if ($item) {
-            // [節點] 這裡模擬寫入記錄 (之後需擴充為寫入 DB)
-            // 為了除錯，我們回傳模擬的成功訊息
-            echo json_encode([
-                'status' => 'success',
-                'shop_name' => $item['shop_name'], // 顯示店名
-                'shop_cd' => $item['shop_cd'],
-                'msg' => '掃描成功'
-            ]);
-        } else {
-            // 查無此箱
-            echo json_encode([
-                'status' => 'error', 
-                'msg' => "查無箱號：$carton_no (非此櫃貨物)"
-            ]);
-        }
-
-    } catch (Exception $e) {
-        // [節點] 捕捉所有邏輯錯誤回傳給前端
-        echo json_encode([
-            'status' => 'error', 
-            'msg' => '系統異常: ' . $e->getMessage()
-        ]);
-    }
-    exit;
+// 輔助函數: 寫入掃描紀錄表
+function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
+    // scan_type: 0正常, 1破損, 2錯分, 3溢卸
+    // 這裡使用 ON DUPLICATE KEY UPDATE 避免重複掃描導致 Error (視您的業務邏輯而定，若允許重複掃描則直接 INSERT)
+    // 假設一箱只能被掃一次，若重複掃描則更新狀態
+    $sql = "INSERT INTO scan_records (container_id, import_item_id, carton_no, pallet_num, scan_type, scanned_at) 
+            VALUES (?, ?, ?, ?, ?, NOW())
+            ON DUPLICATE KEY UPDATE scanned_at = NOW(), scan_type = VALUES(scan_type), pallet_num = VALUES(pallet_num)";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$cid, $itemId, $carton, $pallet, $type]);
 }
 ?>
 
@@ -81,210 +145,258 @@ if (isset($_POST['action']) && $_POST['action'] == 'scan') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DAISO 分揀作業 (Debug)</title>
+    <title>DAISO 倉庫分揀系統</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
-    
     <style>
         body { background-color: #f4f7f6; font-family: "Microsoft JhengHei", sans-serif; }
-        .frame-container { min-height: 100vh; display: flex; flex-direction: column; }
-        .header-panel { background: #2c3e50; color: white; padding: 10px; }
-        .main-content { flex: 1; display: flex; flex-wrap: wrap; }
+        .frame-container { display: flex; flex-direction: column; min-height: 100vh; }
         
-        /* 響應式佈局 */
-        .frame-left { flex: 1; min-width: 300px; border-right: 1px solid #ddd; background: #fff; padding: 20px; }
-        .frame-center { flex: 2; min-width: 400px; background: #ebf0f1; padding: 20px; text-align: center; }
-        .frame-right { flex: 1; min-width: 300px; border-left: 1px solid #ddd; background: #fff; padding: 20px; }
-
-        .big-display { font-size: 3.5rem; font-weight: bold; color: #27ae60; margin: 20px 0; line-height: 1.2; }
-        .error-display { color: #c0392b; font-size: 2rem; }
-        .scan-input { font-size: 1.5rem; text-align: center; border: 3px solid #3498db; }
-        .damage-btn { height: 80px; font-size: 1.5rem; }
+        /* 頂部導航 */
+        .header-panel { background: #2c3e50; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
         
-        /* 錯誤訊息框 */
-        #error_debug_box { display: none; font-size: 0.9rem; margin-top: 10px; }
+        /* 主佈局: 左(設定) 中(操作) 右(紀錄) */
+        .main-content { display: flex; flex: 1; overflow: hidden; }
+        
+        .left-panel { width: 320px; padding: 20px; background: #fff; border-right: 1px solid #ddd; overflow-y: auto; }
+        .center-panel { flex: 1; padding: 30px; background: #ecf0f1; display: flex; flex-direction: column; align-items: center; }
+        .right-panel { width: 350px; padding: 20px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; }
 
-        @media (max-width: 768px) {
+        /* 輸入框與結果顯示 */
+        .scan-input { font-size: 2rem; text-align: center; width: 100%; max-width: 600px; margin-bottom: 20px; border: 4px solid #3498db; border-radius: 10px; padding: 10px; }
+        .result-box { width: 100%; max-width: 600px; min-height: 250px; background: #fff; border-radius: 10px; padding: 30px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        
+        .result-title { font-size: 2.5rem; font-weight: bold; margin-bottom: 15px; }
+        .result-desc { font-size: 1.5rem; color: #555; }
+        
+        /* 紀錄列表樣式 */
+        .log-item { padding: 12px; border-bottom: 1px solid #eee; font-size: 1.1rem; animation: fadeIn 0.5s; }
+        .log-item.normal { border-left: 5px solid #2ecc71; }
+        .log-item.error { border-left: 5px solid #e74c3c; background-color: #fadbd8; }
+        .log-item.overage { border-left: 5px solid #f39c12; background-color: #fdebd0; }
+        
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* 手機 RWD */
+        @media (max-width: 992px) {
             .main-content { flex-direction: column; }
-            .frame-left, .frame-center, .frame-right { width: 100%; border: none; padding: 15px; }
-            .big-display { font-size: 2.5rem; }
+            .left-panel, .right-panel { width: 100%; height: auto; border: none; padding: 15px; }
+            .center-panel { min-height: 300px; }
+            .scan-input { font-size: 1.5rem; }
         }
     </style>
 </head>
 <body>
 
 <div class="frame-container">
-    <div class="header-panel d-flex justify-content-between align-items-center">
-        <h4 class="m-0">DAISO 分揀系統</h4>
-        <span class="badge bg-secondary">V5.2 Debug</span>
+    <div class="header-panel">
+        <h4 class="m-0"><i class="bi bi-box-seam"></i> DAISO 分揀作業</h4>
+        <div>
+            </div>
     </div>
 
     <div class="main-content">
-        <div class="frame-left">
-            <h5><i class="bi bi-sliders"></i> 作業配置</h5>
+        <div class="left-panel shadow-sm">
+            <h5 class="mb-3 text-primary"><i class="bi bi-gear-fill"></i> 作業設定</h5>
             <hr>
+            
             <div class="mb-3">
-                <label>選擇貨櫃 (LotNo)</label>
-                <select class="form-select" id="container_id">
+                <label class="form-label fw-bold">1. 選擇貨櫃 (LotNo)</label>
+                <select id="select_container" class="form-select form-select-lg">
+                    <option value="">-- 請選擇 --</option>
                     <?php
-                    // 這裡也加入 Try-Catch 防止下拉選單導致頁面掛掉
-                    try {
-                        $containers = $pdo->query("SELECT * FROM containers ORDER BY id DESC LIMIT 20")->fetchAll();
-                        if (count($containers) == 0) echo "<option value=''>無貨櫃資料，請先導入</option>";
-                        foreach ($containers as $c) {
-                            $selected = ($c['status'] == 0) ? 'selected' : '';
-                            echo "<option value='{$c['id']}' $selected>{$c['lot_no']} " . ($c['status']==1?'(結案)':'') . "</option>";
-                        }
-                    } catch (Exception $e) {
-                        echo "<option>讀取失敗: {$e->getMessage()}</option>";
+                    // 只列出未結案的貨櫃
+                    $stmt = $pdo->query("SELECT * FROM containers WHERE status = 0 ORDER BY id DESC");
+                    while ($row = $stmt->fetch()) {
+                        echo "<option value='{$row['id']}'>{$row['lot_no']}</option>";
                     }
                     ?>
                 </select>
             </div>
-            <div class="alert alert-light border">
-                <small class="text-muted">DB狀態: 連線正常 (Port <?php echo $port; ?>)</small>
+
+            <div class="mb-3">
+                <label class="form-label fw-bold">2. 選擇店鋪 (Shop)</label>
+                <select id="select_shop" class="form-select form-select-lg" disabled>
+                    <option value="">-- 請先選貨櫃 --</option>
+                </select>
+                <input type="hidden" id="selected_shop_name">
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-bold">3. 選擇棧板 (Pallet)</label>
+                <select id="select_pallet" class="form-select form-select-lg">
+                    <?php 
+                    for($i=1; $i<=20; $i++) { 
+                        echo "<option value='$i'>棧板 [{$i}]</option>"; 
+                    } 
+                    ?>
+                </select>
+            </div>
+
+            <div class="alert alert-secondary mt-4">
+                <small><i class="bi bi-exclamation-circle"></i> 請依序選擇上方項目，確認無誤後再進行掃描。</small>
             </div>
         </div>
 
-        <div class="frame-center">
-            <h3 class="mb-3">請掃描箱號</h3>
-            <input type="text" id="barcode_input" class="form-control scan-input shadow-sm" placeholder="游標請置於此掃描" autocomplete="off" autofocus>
+        <div class="center-panel">
+            <label class="mb-2 fw-bold text-muted">請掃描箱號 (Carton No)</label>
+            <input type="text" id="barcode" class="scan-input" placeholder="點擊此處掃描" autocomplete="off" autofocus>
             
-            <div id="result_area" class="mt-4 p-3 bg-white rounded shadow-sm" style="min-height: 200px;">
-                <p class="text-muted mb-0">等待掃描...</p>
-                
-                <div id="display_shop_name" class="big-display">---</div>
-                <div class="h4 text-secondary" id="display_shop_cd"></div>
-                
-                <div id="error_debug_box" class="alert alert-danger"></div>
-            </div>
-
-            <div class="row mt-4">
-                <div class="col">
-                    <button class="btn btn-warning w-100 damage-btn shadow-sm" id="btn_damage">
-                        <i class="bi bi-camera"></i> 疑似破損<br><small>(按此拍照)</small>
-                    </button>
-                </div>
+            <div id="result_area" class="result-box">
+                <div class="text-muted"><i class="bi bi-upc-scan" style="font-size: 3rem;"></i><br>等待掃描...</div>
             </div>
         </div>
 
-        <div class="frame-right">
-            <h5><i class="bi bi-clock-history"></i> 最近掃描</h5>
+        <div class="right-panel shadow-sm">
+            <h5 class="mb-3 text-success"><i class="bi bi-list-check"></i> 作業紀錄</h5>
             <hr>
-            <ul class="list-group list-group-flush" id="scan_history">
-                <li class="list-group-item text-muted text-center">尚無紀錄</li>
-            </ul>
+            <div id="scan_log">
+                <div class="text-center text-muted mt-5">尚無紀錄</div>
+            </div>
         </div>
     </div>
 </div>
 
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
-    let isDamagedPending = false;
-
-    // 1. 監聽 Enter 鍵 (掃描槍行為)
-    $('#barcode_input').keypress(function(e) {
-        if (e.which == 13) {
-            let barcode = $(this).val().trim();
-            if (barcode) {
-                processScan(barcode);
-                $(this).val(''); // 清空輸入框
-            }
-        }
-    });
-
-    // 2. 破損按鈕邏輯
-    $('#btn_damage').click(function() {
-        isDamagedPending = !isDamagedPending; // 切換狀態
-        if (isDamagedPending) {
-            $(this).removeClass('btn-warning').addClass('btn-danger').html('<i class="bi bi-exclamation-circle"></i> 請掃描損壞箱號');
-            $('#barcode_input').focus();
+    // --- 1. 貨櫃變更時，AJAX 載入店鋪 ---
+    $('#select_container').change(function() {
+        let cid = $(this).val();
+        let $shopSelect = $('#select_shop');
+        
+        // 重置店鋪選單
+        $shopSelect.html('<option value="">載入中...</option>').prop('disabled', true);
+        
+        if (cid) {
+            $.post('daiso.php', { action: 'get_shops', container_id: cid }, function(data) {
+                let html = '<option value="">-- 請選擇店鋪 --</option>';
+                data.forEach(function(shop) {
+                    html += `<option value="${shop.shop_cd}" data-name="${shop.shop_name}">${shop.shop_cd} ${shop.shop_name}</option>`;
+                });
+                $shopSelect.html(html).prop('disabled', false);
+            }, 'json');
         } else {
-            resetDamageBtn();
+            $shopSelect.html('<option value="">-- 請先選貨櫃 --</option>');
         }
     });
 
-    function resetDamageBtn() {
-        isDamagedPending = false;
-        $('#btn_damage').removeClass('btn-danger').addClass('btn-warning').html('<i class="bi bi-camera"></i> 疑似破損<br><small>(按此拍照)</small>');
-    }
+    // 當選擇店鋪時，紀錄店名到隱藏欄位，並聚焦輸入框
+    $('#select_shop').change(function() {
+        let name = $(this).find(':selected').data('name');
+        $('#selected_shop_name').val(name);
+        $('#barcode').focus();
+    });
 
-    // 3. 核心：發送 AJAX 請求
-    function processScan(barcode) {
-        let containerId = $('#container_id').val();
-        
-        // UI 重置
-        $('#error_debug_box').hide();
-        $('#display_shop_name').text('查詢中...').removeClass('error-display').css('color', '#95a5a6');
-        
-        if(!containerId) {
-            showError('錯誤：請先在左側選擇貨櫃批號');
+    // --- 2. 監聽掃描 (Enter 鍵) ---
+    $('#barcode').keypress(function(e) {
+        if (e.which == 13) { // Enter key
+            let code = $(this).val().trim();
+            if(code) handleScan(code);
+            $(this).val(''); // 清空輸入框
+        }
+    });
+
+    // --- 3. 處理掃描邏輯 ---
+    function handleScan(code) {
+        let cid = $('#select_container').val();
+        let shopCd = $('#select_shop').val();
+        let shopName = $('#selected_shop_name').val();
+        let pallet = $('#select_pallet').val();
+
+        // 前端防呆：確認已選取必要條件
+        if (!cid || !shopCd) {
+            alert('請先在左側選擇 [貨櫃] 與 [店鋪]');
             return;
         }
 
-        $.ajax({
-            url: 'daiso.php',
-            type: 'POST',
-            dataType: 'json', // 強制解析 JSON
-            data: {
-                action: 'scan',
-                carton_no: barcode,
-                container_id: containerId,
-                is_damaged: isDamagedPending
-            },
-            success: function(res) {
-                if (res.status === 'success') {
-                    // 成功：綠色大字顯示店名
-                    $('#display_shop_name').text(res.shop_name).css('color', '#27ae60').removeClass('error-display');
-                    $('#display_shop_cd').text('店號: ' + res.shop_cd);
-                    
-                    // 加入歷史紀錄
-                    let badge = isDamagedPending ? '<span class="badge bg-danger">損</span> ' : '';
-                    let itemHtml = `<li class="list-group-item d-flex justify-content-between align-items-center">
-                                        <span>${badge}${barcode}</span>
-                                        <span class="fw-bold">${res.shop_name}</span>
-                                    </li>`;
-                    $('#scan_history').prepend(itemHtml);
-                    // 只保留最近 10 筆
-                    if ($('#scan_history li').length > 10) $('#scan_history li:last').remove();
-                    
-                    // 播放成功音效 (可選)
-                    // new Audio('ok.mp3').play();
-                } else {
-                    // 邏輯錯誤 (如查無此箱)
-                    showError(res.msg);
-                    // 播放錯誤音效 (可選)
-                    // new Audio('error.mp3').play();
-                }
-                resetDamageBtn();
-            },
-            error: function(xhr, status, error) {
-                // 系統層級錯誤 (如 PHP 語法錯誤、DB 斷線)
-                console.error("AJAX Error:", xhr.responseText);
-                let errorMsg = "系統連線錯誤";
-                
-                // 嘗試解析後端回傳的錯誤文字
-                if (xhr.responseJSON && xhr.responseJSON.msg) {
-                    errorMsg = xhr.responseJSON.msg;
-                } else if (xhr.responseText) {
-                    // 截取部分錯誤訊息顯示
-                    errorMsg = "程式錯誤: " + xhr.responseText.substring(0, 50) + "...";
-                }
-                showError(errorMsg);
+        $.post('daiso.php', {
+            action: 'scan',
+            barcode: code,
+            container_id: cid,
+            shop_cd: shopCd,
+            pallet_num: pallet
+        }, function(res) {
+            let $result = $('#result_area');
+            
+            // 狀態判斷
+            if (res.status === 'success') {
+                // 正確
+                $result.html(`
+                    <div class="result-title text-success"><i class="bi bi-check-circle"></i> 正確</div>
+                    <div class="result-desc fw-bold">${res.msg}</div>
+                `);
+                addLog(res.log_str, 'normal');
+            } 
+            else if (res.status === 'warning') {
+                // [需求 3] 錯分告警
+                $result.html(`
+                    <div class="result-title text-danger"><i class="bi bi-exclamation-triangle-fill"></i> 異常警報</div>
+                    <div class="result-desc text-danger fw-bold">${res.msg.replace(/\n/g, '<br>')}</div>
+                `);
+                addLog(res.log_str, 'error');
+                // 播放音效 (瀏覽器需允許)
+                // new Audio('error.mp3').play().catch(e=>{}); 
             }
+            else if (res.status === 'not_found') {
+                // [需求 4] 溢卸確認流程
+                $result.html(`<div class="result-title text-warning">❓ 查無此箱</div>`);
+                
+                // 延遲一點點跳 Alert 以免擋住介面更新
+                setTimeout(function() {
+                    if (confirm(`箱號 [${code}] 不在清單中。\n\n是否將其新增為 [${shopName}] 的溢卸貨物？`)) {
+                        addOverage(code, cid, shopCd, shopName, pallet);
+                    } else {
+                        $result.html(`<div class="text-muted">已取消操作</div>`);
+                    }
+                }, 100);
+            }
+        }, 'json').fail(function() {
+            alert('系統連線錯誤，請檢查網路');
         });
     }
 
-    function showError(msg) {
-        $('#display_shop_name').text('錯誤').addClass('error-display');
-        $('#display_shop_cd').text('');
-        $('#error_debug_box').text(msg).show(); // 顯示紅框錯誤訊息
+    // --- 4. 新增溢卸 AJAX ---
+    function addOverage(code, cid, shopCd, shopName, pallet) {
+        $.post('daiso.php', {
+            action: 'add_overage',
+            barcode: code,
+            container_id: cid,
+            shop_cd: shopCd,
+            shop_name: shopName,
+            pallet_num: pallet
+        }, function(res) {
+            if (res.status === 'success') {
+                $('#result_area').html(`
+                    <div class="result-title text-primary">新增成功</div>
+                    <div class="result-desc">${res.msg}</div>
+                `);
+                addLog(res.log_str, 'overage');
+            } else {
+                alert(res.msg);
+            }
+        }, 'json');
     }
 
-    // 保持焦點
-    setInterval(function() {
-        if (!isDamagedPending && !$('#barcode_input').is(':focus')) {
-            // $('#barcode_input').focus(); // 視需求開啟，避免在手機上一直跳鍵盤
+    // --- 5. 更新右側紀錄 (Log) ---
+    function addLog(text, type) {
+        // 移除"尚無紀錄"文字
+        if ($('#scan_log .text-center').length) $('#scan_log').empty();
+
+        let timestamp = new Date().toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        let html = `
+            <div class="log-item ${type}">
+                <div class="d-flex justify-content-between">
+                    <small class="text-muted">${timestamp}</small>
+                </div>
+                <div>${text}</div>
+            </div>`;
+        $('#scan_log').prepend(html);
+    }
+
+    // --- 6. 自動聚焦 (可選，防止掃描槍失焦) ---
+    setInterval(() => {
+        if(!$('#barcode').is(':focus') && !window.blockFocus) {
+            // $('#barcode').focus(); // 若干擾手動輸入可註解此行
         }
     }, 2000);
 </script>
