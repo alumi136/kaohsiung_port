@@ -1,7 +1,7 @@
 <?php
 /**
- * 大創貨物分揀系統 - 現場作業端 (Daiso Operation) v8.1 Fix
- * 修正: 資料庫寫入失敗無回饋問題、加入詳細錯誤日誌
+ * 大創貨物分揀系統 - 現場作業端 (Daiso Operation) v9.0
+ * 功能: 掃描分揀、防呆告警、溢卸處理、棧板管理、新增手機相機掃描
  */
 
 // 強制關閉頁面上的錯誤輸出，改為回傳 JSON 錯誤
@@ -52,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $barcode = trim($_POST['barcode']);
         $containerId = $_POST['container_id'];
         $selectedShopCd = $_POST['shop_cd'];
-        $selectedPallet = (int)$_POST['pallet_num']; // 強制轉為數字
+        $selectedPallet = (int)$_POST['pallet_num'];
         
         if (empty($barcode) || empty($containerId)) {
             jsonResponse('error', '資料不完整 (箱號或貨櫃ID遺失)');
@@ -89,7 +89,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             jsonResponse('success', $correctShopName, "棧板[$selectedPallet] $barcode $correctShopName", $correctShopName);
 
         } catch (Exception $e) {
-            // 寫入 Error Log 以便除錯
             file_put_contents('debug_error_log.txt', date('Y-m-d H:i:s') . " Scan Error: " . $e->getMessage() . "\n", FILE_APPEND);
             jsonResponse('error', '系統錯誤: ' . $e->getMessage());
         }
@@ -105,12 +104,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         try {
             $pdo->beginTransaction();
-            // 新增到 import_items
             $stmt = $pdo->prepare("INSERT INTO import_items (container_id, shop_cd, shop_name, carton_no, box_qty, total_pcs, is_overage) VALUES (?, ?, ?, ?, 1, 1, 1)");
             $stmt->execute([$containerId, $selectedShopCd, $selectedShopName, $barcode]);
             $newItemId = $pdo->lastInsertId();
 
-            // 記錄掃描 (scan_type = 3)
             insertScanRecord($pdo, $containerId, $newItemId, $barcode, $selectedPallet, 3);
 
             $pdo->commit();
@@ -123,17 +120,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 
-// 輔助函數: 寫入掃描紀錄表
 function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
     try {
-        // 使用 ON DUPLICATE KEY UPDATE 確保重複掃描會更新時間與狀態
         $sql = "INSERT INTO scan_records (container_id, import_item_id, carton_no, pallet_num, scan_type, scanned_at) 
                 VALUES (?, ?, ?, ?, ?, NOW())
                 ON DUPLICATE KEY UPDATE scanned_at = NOW(), scan_type = VALUES(scan_type), pallet_num = VALUES(pallet_num)";
         $stmt = $pdo->prepare($sql);
         return $stmt->execute([$cid, $itemId, $carton, $pallet, $type]);
     } catch (PDOException $e) {
-        // 將 SQL 錯誤寫入檔案，這對除錯非常重要
         file_put_contents('debug_sql_error.txt', date('Y-m-d H:i:s') . " SQL Fail: " . $e->getMessage() . "\n", FILE_APPEND);
         return false;
     }
@@ -144,29 +138,50 @@ function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DAISO 分揀作業 (Fix)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DAISO 分揀作業 (Mobile Scan)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+
     <style>
-        body { background-color: #f4f7f6; font-family: "Microsoft JhengHei", sans-serif; }
+        body { background-color: #f4f7f6; font-family: 'Noto Sans TC', "Microsoft JhengHei", sans-serif; }
         .frame-container { display: flex; flex-direction: column; min-height: 100vh; }
         .header-panel { background: #2c3e50; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
         .main-content { display: flex; flex: 1; overflow: hidden; }
         .left-panel { width: 320px; padding: 20px; background: #fff; border-right: 1px solid #ddd; overflow-y: auto; }
         .center-panel { flex: 1; padding: 30px; background: #ecf0f1; display: flex; flex-direction: column; align-items: center; }
         .right-panel { width: 350px; padding: 20px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; }
+        
         .scan-input { font-size: 2rem; text-align: center; width: 100%; max-width: 600px; margin-bottom: 20px; border: 4px solid #3498db; border-radius: 10px; padding: 10px; }
         .result-box { width: 100%; max-width: 600px; min-height: 250px; background: #fff; border-radius: 10px; padding: 30px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; }
         .result-title { font-size: 3rem; font-weight: bold; margin-bottom: 15px; }
         .result-desc { font-size: 1.5rem; color: #555; }
+        
         .log-item { padding: 12px; border-bottom: 1px solid #eee; font-size: 1.1rem; animation: fadeIn 0.5s; }
         .log-item.normal { border-left: 5px solid #2ecc71; }
         .log-item.error { border-left: 5px solid #e74c3c; background-color: #fadbd8; }
         .log-item.overage { border-left: 5px solid #f39c12; background-color: #fdebd0; }
+        
+        /* 手機相機掃描相關樣式 */
+        #camera-wrapper { width: 100%; max-width: 600px; display: none; margin-bottom: 20px; position: relative; border-radius: 10px; overflow: hidden; background: #000; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        #video { width: 100%; height: auto; display: block; }
+        .laser {
+            position: absolute; top: 50%; left: 10%; right: 10%;
+            height: 2px; background: red; box-shadow: 0 0 10px red;
+            animation: scanning 2s infinite ease-in-out;
+            z-index: 10;
+        }
+        @keyframes scanning { 0% { top: 20%; } 50% { top: 80%; } 100% { top: 20%; } }
+        
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         @media (max-width: 992px) { .main-content { flex-direction: column; } .left-panel, .right-panel { width: 100%; height: auto; border: none; } }
     </style>
+    
+    <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
 </head>
 <body>
 
@@ -205,8 +220,25 @@ function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
         </div>
 
         <div class="center-panel">
-            <label class="mb-2 fw-bold text-muted">請掃描箱號 (Carton No)</label>
+            <div class="w-100" style="max-width: 600px;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="fw-bold text-muted mb-0">請掃描箱號 (Carton No)</label>
+                    <button id="btn-camera-toggle" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-camera"></i> 手機掃描
+                    </button>
+                </div>
+            </div>
+
+            <div id="camera-wrapper">
+                <video id="video" playsinline></video>
+                <div class="laser"></div>
+                <div class="p-2 text-center text-white bg-dark">
+                    <small>請將條碼對準紅線</small>
+                </div>
+            </div>
+
             <input type="text" id="barcode" class="scan-input" placeholder="掃描條碼" autocomplete="off" autofocus>
+            
             <div id="result_area" class="result-box">
                 <div class="text-muted"><i class="bi bi-upc-scan" style="font-size: 3rem;"></i><br>等待掃描...</div>
             </div>
@@ -221,7 +253,9 @@ function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
 
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
-    // 載入店鋪
+    // ------------------------------------
+    //  核心業務邏輯 (設定 & AJAX)
+    // ------------------------------------
     $('#select_container').change(function() {
         let cid = $(this).val();
         let $shopSelect = $('#select_shop');
@@ -242,7 +276,7 @@ function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
         $('#barcode').focus();
     });
 
-    // 掃描處理
+    // 實體掃描槍輸入
     $('#barcode').keypress(function(e) {
         if (e.which == 13) {
             let code = $(this).val().trim();
@@ -273,12 +307,16 @@ function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
                     $result.html(`<div class="result-title text-danger">⚠️ 異常警報</div><div class="result-desc text-danger fw-bold">${res.msg.replace(/\n/g, '<br>')}</div>`);
                     addLog(res.log_str, 'error');
                 } else if (res.status === 'not_found') {
+                    // 若正在使用相機，先暫停以免連續掃描干擾 confirm
+                    if(isScanning) stopCamera(); 
+
                     $result.html(`<div class="result-title text-warning">❓ 查無此箱</div>`);
                     setTimeout(() => {
                         if (confirm(`箱號 [${code}] 不在清單中。\n是否新增為 [${shopName}] 的溢卸貨物？`)) {
                             addOverage(code, cid, shopCd, shopName, pallet);
                         } else {
                             $result.html(`<div class="text-muted">已取消操作</div>`);
+                            // 若原本有開相機，操作取消後可考慮是否自動重啟，這裡先不重啟以免煩人
                         }
                     }, 100);
                 } else {
@@ -286,8 +324,8 @@ function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
                 }
             },
             error: function(xhr, status, error) {
-                console.error(xhr.responseText); // 查看後端回傳的原始錯誤
-                alert('系統錯誤，請查看 Console 或 debug_sql_error.txt');
+                console.error(xhr.responseText);
+                alert('系統錯誤，請查看 debug_sql_error.txt');
             }
         });
     }
@@ -306,9 +344,81 @@ function insertScanRecord($pdo, $cid, $itemId, $carton, $pallet, $type) {
         let timestamp = new Date().toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit'});
         $('#scan_log').prepend(`<div class="log-item ${type}"><small class="text-muted">${timestamp}</small><div>${text}</div></div>`);
     }
-    
-    // 保持聚焦
-    setInterval(() => { if(!$('#barcode').is(':focus')) { /* $('#barcode').focus(); */ } }, 2000);
+
+    // ------------------------------------
+    //  手機相機掃描邏輯 (ZXing)
+    // ------------------------------------
+    let codeReader;
+    let isScanning = false;
+    let selectedDeviceId;
+
+    $('#btn-camera-toggle').click(function() {
+        if (isScanning) {
+            stopCamera();
+        } else {
+            startCamera();
+        }
+    });
+
+    function startCamera() {
+        // 檢查 HTTPS
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            alert('警告：瀏覽器安全性限制，相機功能僅能在 HTTPS 或 localhost 環境下使用。');
+            return;
+        }
+
+        codeReader = new ZXing.BrowserMultiFormatReader();
+        $('#camera-wrapper').show();
+        $('#btn-camera-toggle').removeClass('btn-outline-primary').addClass('btn-danger').html('<i class="bi bi-stop-circle"></i> 停止掃描');
+
+        codeReader.listVideoInputDevices().then((videoInputDevices) => {
+            if (videoInputDevices.length === 0) throw new Error("找不到相機裝置");
+            
+            // 優先嘗試使用後置鏡頭
+            const rearCamera = videoInputDevices.find(device => device.label.toLowerCase().includes('back') || device.label.toLowerCase().includes('後'));
+            selectedDeviceId = rearCamera ? rearCamera.deviceId : videoInputDevices[0].deviceId;
+
+            codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
+                if (result) {
+                    // 掃描成功
+                    playBeep(); // 播放音效
+                    let code = result.text;
+                    $('#barcode').val(code);
+                    handleScan(code); // 觸發核心邏輯
+                    
+                    // 為了避免重複快速掃描，可以選擇是否暫停一小段時間 (此處採連續掃描)
+                }
+                if (err && !(err instanceof ZXing.NotFoundException)) {
+                    console.error(err);
+                }
+            });
+            isScanning = true;
+        }).catch((err) => {
+            console.error(err);
+            alert("無法啟動相機: " + err.message);
+            stopCamera();
+        });
+    }
+
+    function stopCamera() {
+        if (codeReader) {
+            codeReader.reset();
+            codeReader = null;
+        }
+        $('#camera-wrapper').hide();
+        $('#btn-camera-toggle').removeClass('btn-danger').addClass('btn-outline-primary').html('<i class="bi bi-camera"></i> 手機掃描');
+        isScanning = false;
+    }
+
+    function playBeep() {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        oscillator.connect(audioContext.destination);
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(1000, audioContext.currentTime); // 1000Hz 嗶聲
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.1); // 0.1秒
+    }
 </script>
 
 </body>
