@@ -1,7 +1,7 @@
 <?php
 /**
- * 大創貨物分揀系統 - 管理核心 (Sunrise Core) v11.1 Fix
- * 修正: MySQL 8.0 ONLY_FULL_GROUP_BY 報錯問題
+ * 大創貨物分揀系統 - 管理核心 (Sunrise Core) v12.0
+ * 修正: UI 視窗高度、大白單 A4 分頁置中、疊板明細直立合併顯示
  */
 
 // --- 錯誤報告與環境設定 ---
@@ -20,6 +20,7 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Border;
+use PhpOffice\PhpSpreadsheet\Worksheet\PageSetup; // 引入頁面設定
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
 // --- 資料庫連線 ---
@@ -52,11 +53,14 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
     $filename = "Report.xlsx";
 
     // ------------------------------------------------------
-    //  報表 1: 總表 (Summary)
+    //  報表 1: 總表 (維持原有邏輯)
     // ------------------------------------------------------
     if ($type == 'export_summary') {
         $filename = "總表_{$lotNo}.xlsx";
         $sheet->setTitle('總表');
+        // 設定 A4 橫印
+        $sheet->getPageSetup()->setPaperSize(PageSetup::PAPERSIZE_A4);
+        $sheet->getPageSetup()->setOrientation(PageSetup::ORIENTATION_LANDSCAPE);
 
         $headers = ['ShopCD', 'ShopName', 'Total Carton (實掃)', 'Total Box (應到)', 'Total Pcs (應到)', '備註'];
         $sheet->fromArray($headers, NULL, 'A1');
@@ -64,7 +68,6 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
         $sheet->getColumnDimension('B')->setWidth(30);
         $sheet->getColumnDimension('F')->setWidth(40);
 
-        // [修正] GROUP BY 加入 i.shop_name
         $sql = "
             SELECT 
                 i.shop_cd, 
@@ -78,7 +81,7 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
             FROM import_items i
             LEFT JOIN scan_records s ON i.id = s.import_item_id
             WHERE i.container_id = ?
-            GROUP BY i.shop_cd, i.shop_name  -- <--- 修正點
+            GROUP BY i.shop_cd, i.shop_name
             ORDER BY i.shop_cd ASC
         ";
         
@@ -107,28 +110,28 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
     }
 
     // ------------------------------------------------------
-    //  報表 2: 大白單 (Pallet Labels)
+    //  報表 2: 大白單 (Pallet Labels) - A4 嚴格格式 + 置中
     // ------------------------------------------------------
     elseif ($type == 'export_labels') {
         $filename = "大白單_{$lotNo}.xlsx";
         $sheet->setTitle('大白單');
         
+        // 設定 A4 直印
+        $sheet->getPageSetup()->setPaperSize(PageSetup::PAPERSIZE_A4);
+        $sheet->getPageSetup()->setOrientation(PageSetup::ORIENTATION_PORTRAIT);
+        
+        // 取得資料
         $shopOrderSql = "SELECT DISTINCT shop_cd FROM import_items WHERE container_id = ? ORDER BY shop_cd ASC";
         $stmt = $pdo->prepare($shopOrderSql);
         $stmt->execute([$cid]);
         $shopOrders = array_flip($stmt->fetchAll(PDO::FETCH_COLUMN)); 
 
-        // [修正] GROUP BY 加入 i.shop_name
         $sql = "
-            SELECT 
-                i.shop_cd,
-                i.shop_name,
-                s.pallet_num,
-                COUNT(s.id) as carton_count
+            SELECT i.shop_cd, i.shop_name, s.pallet_num, COUNT(s.id) as carton_count
             FROM scan_records s
             JOIN import_items i ON s.import_item_id = i.id
             WHERE s.container_id = ?
-            GROUP BY i.shop_cd, i.shop_name, s.pallet_num -- <--- 修正點
+            GROUP BY i.shop_cd, i.shop_name, s.pallet_num
             ORDER BY i.shop_cd ASC, s.pallet_num ASC
         ";
         $stmt = $pdo->prepare($sql);
@@ -140,44 +143,70 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
             $shopIndex = isset($shopOrders[$p['shop_cd']]) ? ($shopOrders[$p['shop_cd']] + 1) : '?';
             $palletLabel = "{$shopIndex}-{$p['pallet_num']}";
 
+            // 1. 馬來西亞直送櫃
             $sheet->mergeCells("A{$currentRow}:B{$currentRow}");
             $sheet->setCellValue("A{$currentRow}", "馬來西亞直送櫃");
             $sheet->getStyle("A{$currentRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-            $sheet->getStyle("A{$currentRow}")->getFont()->setBold(true)->setSize(16);
+            $sheet->getStyle("A{$currentRow}")->getFont()->setBold(true)->setSize(24); // 字體加大
 
+            // 2. 門市
             $sheet->setCellValue("A" . ($currentRow + 1), "門市:");
             $sheet->setCellValue("B" . ($currentRow + 1), $p['shop_name']);
-            $sheet->getStyle("B" . ($currentRow + 1))->getFont()->setSize(14);
+            $sheet->getStyle("A" . ($currentRow + 1))->getFont()->setSize(16);
+            $sheet->getStyle("B" . ($currentRow + 1))->getFont()->setSize(18);
 
+            // 3. 板號
             $sheet->setCellValue("A" . ($currentRow + 2), "板號:");
             $sheet->setCellValue("B" . ($currentRow + 2), $palletLabel);
-            $sheet->getStyle("B" . ($currentRow + 2))->getFont()->setBold(true)->setSize(20);
+            $sheet->getStyle("A" . ($currentRow + 2))->getFont()->setSize(16);
+            $sheet->getStyle("B" . ($currentRow + 2))->getFont()->setBold(true)->setSize(36); // 板號特大
 
+            // 4. 件數 (數值置中)
             $sheet->setCellValue("A" . ($currentRow + 3), "件數:");
             $sheet->setCellValue("B" . ($currentRow + 3), $p['carton_count']);
-            $sheet->getStyle("B" . ($currentRow + 3))->getFont()->setSize(14);
+            $sheet->getStyle("A" . ($currentRow + 3))->getFont()->setSize(16);
+            $sheet->getStyle("B" . ($currentRow + 3))->getFont()->setSize(20);
+            $sheet->getStyle("B" . ($currentRow + 3))->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER); // [需求2] 置中
 
-            $styleArray = ['borders' => ['outline' => ['borderStyle' => Border::BORDER_THICK]]];
+            // 邊框
+            $styleArray = [
+                'borders' => ['outline' => ['borderStyle' => Border::BORDER_THICK]],
+                'alignment' => ['vertical' => Alignment::VERTICAL_CENTER]
+            ];
             $sheet->getStyle("A{$currentRow}:B" . ($currentRow + 3))->applyFromArray($styleArray);
 
-            $currentRow += 5; 
+            // 調整列高，讓它看起來像一張完整的單子
+            $sheet->getRowDimension($currentRow)->setRowHeight(40);
+            $sheet->getRowDimension($currentRow+1)->setRowHeight(40);
+            $sheet->getRowDimension($currentRow+2)->setRowHeight(60);
+            $sheet->getRowDimension($currentRow+3)->setRowHeight(40);
+
+            // 設定分頁符號，確保一張紙一個標籤
+            $sheet->setBreak("A" . ($currentRow + 4), \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet::BREAK_ROW);
+
+            $currentRow += 5; // 下一張標籤起始列
         }
+        
         $sheet->getColumnDimension('A')->setWidth(15);
-        $sheet->getColumnDimension('B')->setWidth(40);
+        $sheet->getColumnDimension('B')->setWidth(50);
     }
 
     // ------------------------------------------------------
-    //  報表 3: 疊板明細 (Stacking Details)
+    //  報表 3: 疊板明細 (Stacking Details) - A4 + 垂直合併
     // ------------------------------------------------------
     elseif ($type == 'export_details') {
         $filename = "疊板明細_{$lotNo}.xlsx";
         $sheet->setTitle('疊板明細');
+        
+        // 設定 A4 直印
+        $sheet->getPageSetup()->setPaperSize(PageSetup::PAPERSIZE_A4);
 
         $totalSql = "SELECT COUNT(id) FROM scan_records WHERE container_id = ?";
         $stmt = $pdo->prepare($totalSql);
         $stmt->execute([$cid]);
         $grandTotal = $stmt->fetchColumn();
 
+        // Header 資訊
         $sheet->setCellValue('A1', '類型'); $sheet->setCellValue('B1', '馬來西亞直送櫃');
         $sheet->setCellValue('A2', '拆櫃日期'); $sheet->setCellValue('B2', $closeTime);
         $sheet->setCellValue('A3', '櫃號'); $sheet->setCellValue('B3', $lotNo);
@@ -188,29 +217,27 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
         $headers = ['門市名', '店鋪代號', '總板數', '總件數', '板號明細', '對應件數'];
         $sheet->fromArray($headers, NULL, 'A8');
         $sheet->getStyle('A8:F8')->getFont()->setBold(true);
+        $sheet->getStyle('A8:F8')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
 
+        // 資料準備
         $shopOrderSql = "SELECT DISTINCT shop_cd FROM import_items WHERE container_id = ? ORDER BY shop_cd ASC";
         $stmt = $pdo->prepare($shopOrderSql);
         $stmt->execute([$cid]);
         $shopOrders = array_flip($stmt->fetchAll(PDO::FETCH_COLUMN));
 
-        // [修正] GROUP BY 加入 i.shop_name
         $sql = "
-            SELECT 
-                i.shop_cd,
-                i.shop_name,
-                s.pallet_num,
-                COUNT(s.id) as count
+            SELECT i.shop_cd, i.shop_name, s.pallet_num, COUNT(s.id) as count
             FROM scan_records s
             JOIN import_items i ON s.import_item_id = i.id
             WHERE s.container_id = ?
-            GROUP BY i.shop_cd, i.shop_name, s.pallet_num -- <--- 修正點
+            GROUP BY i.shop_cd, i.shop_name, s.pallet_num
             ORDER BY i.shop_cd ASC, s.pallet_num ASC
         ";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$cid]);
         $raw = $stmt->fetchAll();
 
+        // 整理資料結構
         $shops = [];
         foreach ($raw as $r) {
             if (!isset($shops[$r['shop_cd']])) {
@@ -222,28 +249,55 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
                 ];
             }
             $palletLabel = "{$shops[$r['shop_cd']]['shop_index']}-{$r['pallet_num']}";
-            $shops[$r['shop_cd']]['pallets'][] = $palletLabel;
-            $shops[$r['shop_cd']]['counts'][] = $r['count'];
+            $shops[$r['shop_cd']]['pallets'][] = [
+                'label' => $palletLabel,
+                'count' => $r['count']
+            ];
             $shops[$r['shop_cd']]['total_count'] += $r['count'];
         }
 
+        // [需求3] 直立式顯示並合併
         $rowIdx = 9;
         foreach ($shops as $cd => $data) {
-            $sheet->setCellValue("A$rowIdx", $data['name']);
-            $sheet->setCellValue("B$rowIdx", $cd);
-            $sheet->setCellValue("C$rowIdx", count($data['pallets']));
-            $sheet->setCellValue("D$rowIdx", $data['total_count']);
-            $sheet->setCellValue("E$rowIdx", implode("\n", $data['pallets']));
-            $sheet->setCellValue("F$rowIdx", implode("\n", $data['counts'])); 
-            $sheet->getStyle("E$rowIdx:F$rowIdx")->getAlignment()->setWrapText(true);
-            $rowIdx++;
+            $countPallets = count($data['pallets']);
+            $startRow = $rowIdx;
+            
+            // 逐列印出板號明細
+            foreach ($data['pallets'] as $pInfo) {
+                $sheet->setCellValue("E$rowIdx", $pInfo['label']);
+                $sheet->setCellValue("F$rowIdx", $pInfo['count']);
+                $sheet->getStyle("E$rowIdx:F$rowIdx")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+                $rowIdx++;
+            }
+            $endRow = $rowIdx - 1;
+
+            // 垂直合併左側欄位
+            if ($endRow >= $startRow) {
+                $sheet->mergeCells("A$startRow:A$endRow");
+                $sheet->mergeCells("B$startRow:B$endRow");
+                $sheet->mergeCells("C$startRow:C$endRow");
+                $sheet->mergeCells("D$startRow:D$endRow");
+            }
+
+            // 填入店鋪匯總資訊
+            $sheet->setCellValue("A$startRow", $data['name']);
+            $sheet->setCellValue("B$startRow", $cd);
+            $sheet->setCellValue("C$startRow", $countPallets);
+            $sheet->setCellValue("D$startRow", $data['total_count']);
+
+            // 設定左側垂直置中
+            $sheet->getStyle("A$startRow:D$endRow")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
+            $sheet->getStyle("A$startRow:D$endRow")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         }
         
         $sheet->getColumnDimension('A')->setWidth(25);
+        $sheet->getColumnDimension('B')->setWidth(15);
+        $sheet->getColumnDimension('C')->setWidth(10);
+        $sheet->getColumnDimension('D')->setWidth(10);
         $sheet->getColumnDimension('E')->setWidth(15);
+        $sheet->getColumnDimension('F')->setWidth(10);
     }
 
-    // 輸出
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     header('Content-Disposition: attachment;filename="'.$filename.'"');
     header('Cache-Control: max-age=0');
@@ -253,8 +307,9 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
 }
 
 // ==========================================================
-//  下方 Action (刪除、結案、導入) 保持不變
+//  下方 Action 保持不變
 // ==========================================================
+// 刪除
 if (isset($_POST['action']) && $_POST['action'] == 'delete_container') {
     $delId = (int)$_POST['container_id'];
     try {
@@ -275,7 +330,7 @@ if (isset($_POST['action']) && $_POST['action'] == 'delete_container') {
         $message = "<div class='alert alert-danger'>刪除失敗: " . $e->getMessage() . "</div>";
     }
 }
-
+// 結案
 if (isset($_POST['action']) && $_POST['action'] == 'close_container') {
     $closeId = (int)$_POST['container_id'];
     try {
@@ -285,7 +340,7 @@ if (isset($_POST['action']) && $_POST['action'] == 'close_container') {
         $message = "<div class='alert alert-danger'>結案失敗: " . $e->getMessage() . "</div>";
     }
 }
-
+// 導入
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
     $lotNo = trim($_POST['lot_no']);
     try {
@@ -334,6 +389,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
         .bg-green { background-color: #2ecc71; color: white; }
         .lot-link { cursor: pointer; text-decoration: none; font-weight: bold; color: #2980b9; border-bottom: 1px dashed #2980b9; }
         .lot-link:hover { color: #c0392b; border-bottom-color: #c0392b; }
+        
+        /* [需求1] 增加表格容器高度，避免下拉選單被遮擋 */
+        .table-responsive {
+            min-height: 600px; 
+            overflow-y: auto;
+            padding-bottom: 150px; /* 預留底部空間給下拉選單 */
+        }
     </style>
 </head>
 <body>
@@ -369,7 +431,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
         </div>
     </div>
 
-    <div class="card shadow">
+    <div class="card shadow mb-5">
         <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
             <span><i class="fas fa-list-alt"></i> 貨櫃作業總表</span>
             <button class="btn btn-sm btn-light" onclick="location.reload()"><i class="fas fa-sync"></i> 刷新</button>
@@ -377,7 +439,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
         <div class="card-body p-0">
             <div class="table-responsive">
                 <table class="table table-hover table-striped align-middle mb-0 text-center">
-                    <thead class="table-light">
+                    <thead class="table-light sticky-top">
                         <tr>
                             <th>ID</th>
                             <th>貨櫃批號 (LotNo)</th>
@@ -391,7 +453,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
                     </thead>
                     <tbody>
                         <?php
-                        // 修正：應到總箱數排除溢卸
+                        // 應到總箱數排除溢卸
                         $sql = "SELECT c.id, c.lot_no, c.status, c.created_at,
                                        COUNT(DISTINCT CASE WHEN i.is_overage = 0 THEN i.carton_no END) as expected_cartons,
                                        COUNT(DISTINCT s.carton_no) as scanned_cartons
@@ -446,7 +508,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
                                         <button type="button" class="btn btn-primary btn-sm dropdown-toggle" data-bs-toggle="dropdown">
                                             <i class="fas fa-print"></i> 進行輸出
                                         </button>
-                                        <ul class="dropdown-menu">
+                                        <ul class="dropdown-menu dropdown-menu-end">
                                             <li>
                                                 <form method="POST" target="_blank">
                                                     <input type="hidden" name="action" value="export_summary">
@@ -458,14 +520,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
                                                 <form method="POST" target="_blank">
                                                     <input type="hidden" name="action" value="export_labels">
                                                     <input type="hidden" name="container_id" value="<?php echo $row['id']; ?>">
-                                                    <button class="dropdown-item" type="submit">2. 輸出大白單</button>
+                                                    <button class="dropdown-item" type="submit">2. 輸出大白單 (A4)</button>
                                                 </form>
                                             </li>
                                             <li>
                                                 <form method="POST" target="_blank">
                                                     <input type="hidden" name="action" value="export_details">
                                                     <input type="hidden" name="container_id" value="<?php echo $row['id']; ?>">
-                                                    <button class="dropdown-item" type="submit">3. 輸出疊板明細</button>
+                                                    <button class="dropdown-item" type="submit">3. 輸出疊板明細 (A4)</button>
                                                 </form>
                                             </li>
                                         </ul>
