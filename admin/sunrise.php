@@ -1,13 +1,13 @@
 <?php
 /**
- * 大創貨物分揀系統 - 管理核心 (Sunrise Core) v11.0
- * 修正: 應到/實到邏輯分離, 新增三種 Excel 報表輸出
+ * 大創貨物分揀系統 - 管理核心 (Sunrise Core) v11.1 Fix
+ * 修正: MySQL 8.0 ONLY_FULL_GROUP_BY 報錯問題
  */
 
 // --- 錯誤報告與環境設定 ---
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
-ini_set('memory_limit', '512M'); // 報表輸出需要較大記憶體
+ini_set('memory_limit', '512M'); 
 
 $autoloadPath = '/var/www/html/excel/vendor/autoload.php';
 if (file_exists($autoloadPath)) {
@@ -45,9 +45,8 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
     $stmt->execute([$cid]);
     $container = $stmt->fetch();
     $lotNo = $container['lot_no'];
-    $closeTime = $container['updated_at'] ?? date('Y-m-d H:i'); // 假設結案時間
+    $closeTime = $container['updated_at'] ?? date('Y-m-d H:i'); 
 
-    // 建立 Excel 物件
     $spreadsheet = new Spreadsheet();
     $sheet = $spreadsheet->getActiveSheet();
     $filename = "Report.xlsx";
@@ -59,39 +58,27 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
         $filename = "總表_{$lotNo}.xlsx";
         $sheet->setTitle('總表');
 
-        // 標題列
         $headers = ['ShopCD', 'ShopName', 'Total Carton (實掃)', 'Total Box (應到)', 'Total Pcs (應到)', '備註'];
         $sheet->fromArray($headers, NULL, 'A1');
-        
-        // 樣式設定
         $sheet->getStyle('A1:F1')->getFont()->setBold(true);
         $sheet->getColumnDimension('B')->setWidth(30);
         $sheet->getColumnDimension('F')->setWidth(40);
 
-        // 數據查詢邏輯:
-        // 1. 應到 Box/Pcs: 只計算 import_items 中 is_overage=0 的
-        // 2. 實掃 Carton: 計算 scan_records 的總數
-        // 3. 備註: 統計溢卸、破損、未到
+        // [修正] GROUP BY 加入 i.shop_name
         $sql = "
             SELECT 
                 i.shop_cd, 
                 i.shop_name,
-                -- 實掃箱數 (含溢卸)
                 COUNT(DISTINCT s.carton_no) as scanned_cartons,
-                -- 應到 Box (排除溢卸)
                 SUM(CASE WHEN i.is_overage = 0 THEN i.box_qty ELSE 0 END) as total_box,
-                -- 應到 Pcs (排除溢卸)
                 SUM(CASE WHEN i.is_overage = 0 THEN i.total_pcs ELSE 0 END) as total_pcs,
-                -- 應到箱數 (用於計算差異)
                 COUNT(DISTINCT CASE WHEN i.is_overage = 0 THEN i.carton_no END) as expected_cartons,
-                -- 溢卸箱數
                 COUNT(DISTINCT CASE WHEN s.scan_type = 3 THEN s.carton_no END) as overage_count,
-                -- 破損箱數
                 COUNT(DISTINCT CASE WHEN s.scan_type = 1 THEN s.carton_no END) as damaged_count
             FROM import_items i
             LEFT JOIN scan_records s ON i.id = s.import_item_id
             WHERE i.container_id = ?
-            GROUP BY i.shop_cd
+            GROUP BY i.shop_cd, i.shop_name  -- <--- 修正點
             ORDER BY i.shop_cd ASC
         ";
         
@@ -102,9 +89,8 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
         $rowIndex = 2;
         foreach ($rows as $row) {
             $missing = $row['expected_cartons'] - ($row['scanned_cartons'] - $row['overage_count']);
-            $missing = $missing < 0 ? 0 : $missing; // 避免負數
+            $missing = $missing < 0 ? 0 : $missing; 
 
-            // 組合備註
             $remarks = [];
             if ($row['overage_count'] > 0) $remarks[] = "溢卸:{$row['overage_count']}箱";
             if ($row['damaged_count'] > 0) $remarks[] = "破損:{$row['damaged_count']}箱";
@@ -127,14 +113,12 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
         $filename = "大白單_{$lotNo}.xlsx";
         $sheet->setTitle('大白單');
         
-        // 1. 取得店鋪順序 (為了產生 1-X, 2-X 的前面的數字)
         $shopOrderSql = "SELECT DISTINCT shop_cd FROM import_items WHERE container_id = ? ORDER BY shop_cd ASC";
         $stmt = $pdo->prepare($shopOrderSql);
         $stmt->execute([$cid]);
-        $shopOrders = array_flip($stmt->fetchAll(PDO::FETCH_COLUMN)); // Key: ShopCD, Value: Index(0-based)
+        $shopOrders = array_flip($stmt->fetchAll(PDO::FETCH_COLUMN)); 
 
-        // 2. 取得每個店鋪、每個棧板的箱數
-        // Logic: 從 scan_records 抓取實際分揀的結果
+        // [修正] GROUP BY 加入 i.shop_name
         $sql = "
             SELECT 
                 i.shop_cd,
@@ -144,20 +128,18 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
             FROM scan_records s
             JOIN import_items i ON s.import_item_id = i.id
             WHERE s.container_id = ?
-            GROUP BY i.shop_cd, s.pallet_num
+            GROUP BY i.shop_cd, i.shop_name, s.pallet_num -- <--- 修正點
             ORDER BY i.shop_cd ASC, s.pallet_num ASC
         ";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$cid]);
         $pallets = $stmt->fetchAll();
 
-        // 3. 繪製 Excel (模擬標籤樣式)
         $currentRow = 1;
         foreach ($pallets as $p) {
             $shopIndex = isset($shopOrders[$p['shop_cd']]) ? ($shopOrders[$p['shop_cd']] + 1) : '?';
-            $palletLabel = "{$shopIndex}-{$p['pallet_num']}"; // 格式: 店鋪序號-板號
+            $palletLabel = "{$shopIndex}-{$p['pallet_num']}";
 
-            // 每個標籤佔用 5 行
             $sheet->mergeCells("A{$currentRow}:B{$currentRow}");
             $sheet->setCellValue("A{$currentRow}", "馬來西亞直送櫃");
             $sheet->getStyle("A{$currentRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
@@ -168,20 +150,18 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
             $sheet->getStyle("B" . ($currentRow + 1))->getFont()->setSize(14);
 
             $sheet->setCellValue("A" . ($currentRow + 2), "板號:");
-            $sheet->setCellValue("B" . ($currentRow + 2), $palletLabel); // 帶入數值
+            $sheet->setCellValue("B" . ($currentRow + 2), $palletLabel);
             $sheet->getStyle("B" . ($currentRow + 2))->getFont()->setBold(true)->setSize(20);
 
             $sheet->setCellValue("A" . ($currentRow + 3), "件數:");
             $sheet->setCellValue("B" . ($currentRow + 3), $p['carton_count']);
             $sheet->getStyle("B" . ($currentRow + 3))->getFont()->setSize(14);
 
-            // 畫框線
             $styleArray = ['borders' => ['outline' => ['borderStyle' => Border::BORDER_THICK]]];
             $sheet->getStyle("A{$currentRow}:B" . ($currentRow + 3))->applyFromArray($styleArray);
 
-            $currentRow += 5; // 下一張標籤空一行
+            $currentRow += 5; 
         }
-        
         $sheet->getColumnDimension('A')->setWidth(15);
         $sheet->getColumnDimension('B')->setWidth(40);
     }
@@ -193,33 +173,28 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
         $filename = "疊板明細_{$lotNo}.xlsx";
         $sheet->setTitle('疊板明細');
 
-        // 取得總箱數
         $totalSql = "SELECT COUNT(id) FROM scan_records WHERE container_id = ?";
         $stmt = $pdo->prepare($totalSql);
         $stmt->execute([$cid]);
         $grandTotal = $stmt->fetchColumn();
 
-        // Header 資訊
         $sheet->setCellValue('A1', '類型'); $sheet->setCellValue('B1', '馬來西亞直送櫃');
-        $sheet->setCellValue('A2', '拆櫃日期'); $sheet->setCellValue('B2', $closeTime); // 帶入結案時間
+        $sheet->setCellValue('A2', '拆櫃日期'); $sheet->setCellValue('B2', $closeTime);
         $sheet->setCellValue('A3', '櫃號'); $sheet->setCellValue('B3', $lotNo);
         $sheet->setCellValue('A4', '尺寸'); $sheet->setCellValue('B4', '40Ft');
         $sheet->setCellValue('A5', '貨運公司'); $sheet->setCellValue('B5', '昇洋物流');
         $sheet->setCellValue('A6', '總件數'); $sheet->setCellValue('B6', $grandTotal);
 
-        // 表格標題
         $headers = ['門市名', '店鋪代號', '總板數', '總件數', '板號明細', '對應件數'];
         $sheet->fromArray($headers, NULL, 'A8');
         $sheet->getStyle('A8:F8')->getFont()->setBold(true);
 
-        // 數據處理: 需要彙整每個店鋪的所有棧板
-        // 先取得店鋪順序
         $shopOrderSql = "SELECT DISTINCT shop_cd FROM import_items WHERE container_id = ? ORDER BY shop_cd ASC";
         $stmt = $pdo->prepare($shopOrderSql);
         $stmt->execute([$cid]);
         $shopOrders = array_flip($stmt->fetchAll(PDO::FETCH_COLUMN));
 
-        // 查詢詳細數據
+        // [修正] GROUP BY 加入 i.shop_name
         $sql = "
             SELECT 
                 i.shop_cd,
@@ -229,14 +204,13 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
             FROM scan_records s
             JOIN import_items i ON s.import_item_id = i.id
             WHERE s.container_id = ?
-            GROUP BY i.shop_cd, s.pallet_num
+            GROUP BY i.shop_cd, i.shop_name, s.pallet_num -- <--- 修正點
             ORDER BY i.shop_cd ASC, s.pallet_num ASC
         ";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$cid]);
         $raw = $stmt->fetchAll();
 
-        // 重組資料結構 [ShopCD => [pallets => [], total => 0, name => '']]
         $shops = [];
         foreach ($raw as $r) {
             if (!isset($shops[$r['shop_cd']])) {
@@ -249,7 +223,7 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
             }
             $palletLabel = "{$shops[$r['shop_cd']]['shop_index']}-{$r['pallet_num']}";
             $shops[$r['shop_cd']]['pallets'][] = $palletLabel;
-            $shops[$r['shop_cd']]['counts'][] = $r['count']; // 對應件數
+            $shops[$r['shop_cd']]['counts'][] = $r['count'];
             $shops[$r['shop_cd']]['total_count'] += $r['count'];
         }
 
@@ -259,9 +233,8 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
             $sheet->setCellValue("B$rowIdx", $cd);
             $sheet->setCellValue("C$rowIdx", count($data['pallets']));
             $sheet->setCellValue("D$rowIdx", $data['total_count']);
-            $sheet->setCellValue("E$rowIdx", implode("\n", $data['pallets'])); // 換行顯示
+            $sheet->setCellValue("E$rowIdx", implode("\n", $data['pallets']));
             $sheet->setCellValue("F$rowIdx", implode("\n", $data['counts'])); 
-            
             $sheet->getStyle("E$rowIdx:F$rowIdx")->getAlignment()->setWrapText(true);
             $rowIdx++;
         }
@@ -270,7 +243,7 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
         $sheet->getColumnDimension('E')->setWidth(15);
     }
 
-    // 執行下載
+    // 輸出
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     header('Content-Disposition: attachment;filename="'.$filename.'"');
     header('Cache-Control: max-age=0');
@@ -280,9 +253,8 @@ if (isset($_POST['action']) && strpos($_POST['action'], 'export_') === 0) {
 }
 
 // ==========================================================
-//  原有的 Action (刪除、結案、導入) 保持不變
+//  下方 Action (刪除、結案、導入) 保持不變
 // ==========================================================
-// 刪除
 if (isset($_POST['action']) && $_POST['action'] == 'delete_container') {
     $delId = (int)$_POST['container_id'];
     try {
@@ -294,7 +266,7 @@ if (isset($_POST['action']) && $_POST['action'] == 'delete_container') {
         $pdo->beginTransaction();
         $pdo->prepare("DELETE FROM scan_records WHERE container_id = ?")->execute([$delId]);
         $pdo->prepare("DELETE FROM import_items WHERE container_id = ?")->execute([$delId]);
-        $pdo->prepare("DELETE FROM pallets WHERE container_id = ?")->execute([$delId]); // 若有此表
+        $pdo->prepare("DELETE FROM pallets WHERE container_id = ?")->execute([$delId]); 
         $pdo->prepare("DELETE FROM containers WHERE id = ?")->execute([$delId]);
         $pdo->commit();
         $message = "<div class='alert alert-success'>刪除成功。</div>";
@@ -303,7 +275,7 @@ if (isset($_POST['action']) && $_POST['action'] == 'delete_container') {
         $message = "<div class='alert alert-danger'>刪除失敗: " . $e->getMessage() . "</div>";
     }
 }
-// 結案
+
 if (isset($_POST['action']) && $_POST['action'] == 'close_container') {
     $closeId = (int)$_POST['container_id'];
     try {
@@ -313,7 +285,7 @@ if (isset($_POST['action']) && $_POST['action'] == 'close_container') {
         $message = "<div class='alert alert-danger'>結案失敗: " . $e->getMessage() . "</div>";
     }
 }
-// 導入
+
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
     $lotNo = trim($_POST['lot_no']);
     try {
@@ -419,7 +391,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['import_file'])) {
                     </thead>
                     <tbody>
                         <?php
-                        // [修正] 應到總箱數: 排除 is_overage=1 的資料
+                        // 修正：應到總箱數排除溢卸
                         $sql = "SELECT c.id, c.lot_no, c.status, c.created_at,
                                        COUNT(DISTINCT CASE WHEN i.is_overage = 0 THEN i.carton_no END) as expected_cartons,
                                        COUNT(DISTINCT s.carton_no) as scanned_cartons
